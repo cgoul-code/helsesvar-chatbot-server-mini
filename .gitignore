@@ -1,0 +1,34 @@
+# Environment variables and settings
+.env
+.azure_settings.json
+.environement.ini
+
+blobstorage/
+
+# Temporary files and backup artifacts
+*.bak
+*.cvs
+*.csv
+*.xlsm
+*.xlsx
+
+
+# Python-specific exclusions
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+build/
+dist/
+
+# Logs
+*.log
+
+# Ignore IDE/editor-specific files
+*.vscode/
+*.idea/
+.DS_Store
+
+# Ignore Azure deployment temporary files
+zipdeploy/
+
