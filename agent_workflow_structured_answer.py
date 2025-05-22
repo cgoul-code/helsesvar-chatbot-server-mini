@@ -33,6 +33,7 @@ class State(TypedDict):
     query_short_version: str
     query_summary: str
     structured_answer: str
+    num_iterations: int
 
 
 # === Helpers ===
@@ -82,25 +83,47 @@ def llm_call_summary_generator(state: State) -> dict:
     )
     return {"query_summary": msg.content}
 
-def calculate_readability_index(state: State) -> None:
+def calculate_readability_index(state: State) -> dict:
     text = state["answer"]
     words = text.split()
     num_words = len(words) or 1
     num_sentences = max(len(re.split(r'[.!?]', text)) - 1, 1)
     num_long = sum(1 for w in words if len(re.sub(r'[^a-zA-Z]', '', w)) > 6)
     lix = (num_words / num_sentences) + (num_long / num_words) * 100
-    state["lix_score"] = lix
-    state["lix_category"] = categorize_lix(lix)
+
+    return {
+        "lix_score": lix,
+        "lix_category": categorize_lix(lix),
+    }
+
 
 
 def readability_evaluator(state: State) -> dict:
-    calculate_readability_index(state)
-    if state["lix_score"] > 50:
-        return {
+    # Pull in all three updates from the helper
+    updates = calculate_readability_index(state)
+    # Optional: log the new values
+    print(f'index: {updates["lix_score"]:.2f}, antall {state["num_iterations"]}')
+
+    # Build the base of what we’ll return
+    result = {
+        # merge in the new lix 
+        **updates
+    }
+
+    # Decide whether we need another pass
+    if (updates["lix_score"] > 35) and (state["num_iterations"] < 4):
+        result.update({
             "readable_or_not": "not readable",
             "feedback": "Make this text more readable by using shorter sentences, fewer words, and simpler language."
-        }
-    return {"readable_or_not": "readable", "feedback": "No need for improvements"}
+        })
+    else:
+        result.update({
+            "readable_or_not": "readable",
+            "feedback": "No need for improvements"
+        })
+
+    return result
+
 
 
 def llm_make_answer_more_readable(state: State) -> dict:
@@ -108,7 +131,8 @@ def llm_make_answer_more_readable(state: State) -> dict:
     answer = state["answer"]
     feedback = state["feedback"]
     msg = llm.invoke(f"Improve readability: {answer}. Feedback: {feedback}")
-    return {"answer": msg.content}
+    new_count = state["num_iterations"] + 1
+    return {"answer": msg.content, "num_iterations": new_count}
 
 
 def route_answer(state: State) -> str:

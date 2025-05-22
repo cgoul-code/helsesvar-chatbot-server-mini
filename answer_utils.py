@@ -95,6 +95,7 @@ def get_answer(
         "feedback": "",
         "references": [],
         "structured_answer": "",
+        "num_iterations": 0,
     }
 
     final_state = optimizer_workflow.invoke(init_state)

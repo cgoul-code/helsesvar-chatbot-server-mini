@@ -3,8 +3,6 @@
 .azure_settings.json
 .environement.ini
 
-blobstorage/
-
 # Temporary files and backup artifacts
 *.bak
 *.cvs
@@ -12,6 +10,7 @@ blobstorage/
 *.xlsm
 *.xlsx
 
+blobstorage/chatbot/helsenorgeartikler/*.json
 
 # Python-specific exclusions
 __pycache__/
