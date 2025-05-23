@@ -11,6 +11,7 @@ A server application demonstrating Retrieval-Augmented Generation (RAG) with Azu
 - **Natural Language Queries**: Supports conversational queries over indexed data.
 - **Context-Aware Responses**: Generates answers based on search results.
 - **Agent Workflow**: Orchestrates multi-step reasoning for structured answers.
+- **Support markdowns**: Answers include markdown markup 
 
 ---
 
@@ -132,7 +133,8 @@ Open your browser at `http://localhost:80` to interact with the chat interface.
   ],
   "similarity_top_k": "10",
   "similarity_cutoff": "0.75",
-  "vectorIndex": "helsenorgeartikler"
+  "vectorIndex": "helsenorgeartikler",
+  "agent": "agent_workflow_structured_answer",
 }
 ```
 
@@ -146,7 +148,7 @@ Open your browser at `http://localhost:80` to interact with the chat interface.
     "answer": "# Oppsummering av spørsmålet\n\n## Spørsmålet fra brukeren\nHvordan fungerer en hjertestarter?\n\n## Tittel\nHvordan jeg bruker en hjertestarter?\n\n## Kort sammendrag av spørsmålet\nBrukeren spør om hvordan en hjertestarter fungerer.\n\n## Lettlest svar\nEn hjertestarter brukes ved hjertestans sammen med hjerte- og lungeredning (HLR). Når noen opplever hjertestans, kan en hjertestarter bidra til å gjenopprette en normal hjerterytme. \n\nSlik fungerer en hjertestarter:\n1. En hjertestarter brukes ved hjertestans. Den har to elektroder som festes på brystet til personen i hjertestans.\n2. Ved hjelp av disse elektrodene kan hjertestarteren gi ett eller flere strømstøt gjennom hjertet. Dette gir hjertet en sjanse til å starte på nytt med riktig rytme.\n3. Hjertestarteren analyserer hjerterytmen og gir instruksjoner om hva du skal gjøre. Hvis strømstøt ikke vil ha effekt, vil hjertestarteren be deg fortsette med hjerte- og lungeredning.\n4. Hjertestarteren vil også be deg om å stoppe HLR for å analysere hjerterytmen på nytt hvert tredje minutt.\n5. Dersom personen har ventrikkelflimmer eller ventrikkeltakykardi (kaotiske hjerterytmer), vil hjertestarteren anbefale å gi strømstøt ved å trykke på sjokknappen.\n6. Etter at strømstøt er gitt, må du fortsette med HLR inntil ambulansen kommer eller til du ser sikre tegn til liv.\n\nDet er viktig å følge hjertestarterens instruksjoner nøye og fortsette med hjerte- og lungeredning til ambulansepersonell overtar eller til personen viser tegn til liv.\n\n## Referanser\n- [Slik bruker du hjertestarter - Helsenorge](https://www.helsenorge.no/forstehjelp/bruk-av-hjertestarter/) (Relevans: 0.89)\n- [Slik bruker du hjertestarter - Helsenorge](https://www.helsenorge.no/forstehjelp/bruk-av-hjertestarter/) (Relevans: 0.88)\n- [Phillips Heart Start 1 - Helsenorge](https://www.helsenorge.no/forstehjelp/registrer-din-hjertestarter/phillips-heart-start-1/) (Relevans: 0.85)\n- [Registrer din hjertestarter - Helsenorge](https://www.helsenorge.no/forstehjelp/registrer-din-hjertestarter/) (Relevans: 0.85)\n- [Phillips Heartstart FRX - Helsenorge](https://www.helsenorge.no/forstehjelp/registrer-din-hjertestarter/phillips-heartstart-frx/) (Relevans: 0.85)\n- [Philips HeartStart FR3 - Helsenorge](https://www.helsenorge.no/forstehjelp/registrer-din-hjertestarter/philips-heartstart-fr3/) (Relevans: 0.84)\n- [Hjartestans – Ring 113 og start hjartekompresjonar - Helsenorge](https://www.helsenorge.no/sykdom/hjerte-og-kar/hjertestans/) (Relevans: 0.84)\n- [Hjerte- og lungeredning (HLR) - slik gir du livreddende førstehjelp - Helsenorge](https://www.helsenorge.no/forstehjelp/hjerte-og-lungeredning/) (Relevans: 0.84)\n- [Hjartestans – Ring 113 og start hjartekompresjonar - Helsenorge](https://www.helsenorge.no/sykdom/hjerte-og-kar/hjertestans/) (Relevans: 0.83)\n- [Primedic Heartsave ONE - Helsenorge](https://www.helsenorge.no/forstehjelp/registrer-din-hjertestarter/primedic-heartsave-one/) (Relevans: 0.83)\n"
 }
 ```
-
+![Postman example](./postman.png)
 
 ---
 

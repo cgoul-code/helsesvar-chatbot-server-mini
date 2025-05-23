@@ -1,8 +1,8 @@
 from quart import request, jsonify, Response
 import logging
-from config import (server_settings, vector_store)
+from config import (server_settings, vector_store, CustomError)
 from query_utils import (get_query_settings)
-from answer_utils import (get_answer)
+from answer_utils import (get_structured_answer)
 
 def register_routes(app):
     @app.route("/chat", methods=["POST"])
@@ -18,10 +18,19 @@ def register_routes(app):
             json_request = await request.get_json()
             logging.info("Received /chat payload: %r", json_request)
             # your real logic here...
-            
+            # get info from query
+            #
             query_settings = get_query_settings(json_request)
-            answer = get_answer(query_settings, server_settings, vector_store)
-            return {"answer": answer}, 200
+            
+            # route to the correct agent
+            #
+            if(query_settings.agent == "agent_workflow_structured_answer"):
+                answer = get_structured_answer(query_settings, server_settings, vector_store)
+                return {"answer": answer}, 200
+            else:
+                raise CustomError(
+                    f"Agent {query_settings.agent} mangler!", 404
+        )
         
         except Exception as e:
             logging.error("Error in /chat handler", exc_info=True)

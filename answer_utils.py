@@ -4,9 +4,8 @@ from query_utils import QuerySettings
 from llama_index.core.llms import ChatMessage, MessageRole
 from llama_index.core import ChatPromptTemplate, get_response_synthesizer, VectorStoreIndex
 import logging
-import IPython
 
-def get_answer(
+def get_structured_answer(
     query_settings: QuerySettings,
     server_settings: ServerSettings,
     vector_store: VectorIndexStore
@@ -99,9 +98,7 @@ def get_answer(
     }
 
     final_state = optimizer_workflow.invoke(init_state)
-    
-    from IPython.display import Markdown
-    Markdown(final_state["structured_answer"])
+
 
     # 6) Return the raw string
     return final_state["structured_answer"]
