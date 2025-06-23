@@ -6,12 +6,30 @@ A server application demonstrating Retrieval-Augmented Generation (RAG) with Azu
 
 ### Features
 
-- **Azure OpenAI Integration**: Utilizes Azure OpenAI models for advanced language understanding.
-- **Vector Indexing**: Stores and retrieves text data using LlamaIndex.
-- **Natural Language Queries**: Supports conversational queries over indexed data.
-- **Context-Aware Responses**: Generates answers based on search results.
-- **Agent Workflow**: Orchestrates multi-step reasoning for structured answers.
-- **Support markdowns**: Answers include markdown markup 
+- **Azure OpenAI Integration**  
+  Leverages Azure OpenAI models for advanced language understanding.
+
+- **Vector Indexing**  
+  Efficient storage and retrieval of text data using LlamaIndex.
+
+- **Natural Language Queries**  
+  Supports conversational queries over your indexed data.
+
+- **Context-Aware Responses**  
+  Generates answers grounded in relevant search results.
+
+- **Agent Workflow**  
+  Two interchangeable agents:  
+  - **structured**  
+    Orchestrates multi-step reasoning, composing responses with sections for short name, summary, answer, and references.  
+  - **subqueries**  
+    Decomposes the initial query into subqueries, answers each independently, then synthesizes a cohesive final answer.
+
+- **Markdown Support**  
+  All responses include Markdown formatting.
+
+- **Streaming Support**  
+  Both intermediate workflow actions and the final answer are delivered as a real-time event stream.
 
 ---
 
@@ -134,7 +152,7 @@ Open your browser at `http://localhost:80` to interact with the chat interface.
   "similarity_top_k": "10",      # how many documents from the vectorindex to work with
   "similarity_cutoff": "0.75",   # index for simularity
   "vectorIndex": "helsenorgeartikler",  # vectorindex to work with
-  "agent": "agent_workflow_structured_answer", # agent used for answering the query
+  "agent": "structured", # agent used for answering the query (you can use 'subqueries' or 'structured', se the agent names in AGENT_REGISTRY in route.py)
 }
 ```
 

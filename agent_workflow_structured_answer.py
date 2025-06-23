@@ -6,7 +6,7 @@ from typing_extensions import TypedDict
 
 from llama_index.core.base.response.schema import Response
 from llama_index.core.query_engine import BaseQueryEngine
-
+from langgraph.config import get_stream_writer
 from langgraph.graph import StateGraph, START, END
 
 
@@ -32,7 +32,7 @@ class State_StructuredAnswer(TypedDict):
     references: List[Reference]
     query_short_version: str
     query_summary: str
-    structured_answer: str
+    final_answer: str
     num_iterations: int
 
 
@@ -53,9 +53,13 @@ def categorize_lix(lix: float) -> str:
 
 def llm_call_answer(state: State_StructuredAnswer) -> dict:
     response_obj = state["query_engine"].query(state["query"])
+    writer = get_stream_writer()  
+    writer({"action": "Calling llm to get the initial answer"})
     return {"answer": response_obj.response, "response": response_obj}
 
 def validate_response(state: State_StructuredAnswer) -> dict:
+    writer = get_stream_writer()  
+    writer({"action": "Validating the response"})
     cutoff = state["similarity_cutoff"]
     nodes = [n for n in state["response"].source_nodes if n.score is not None]
     for n in nodes:
@@ -67,6 +71,9 @@ def validate_response(state: State_StructuredAnswer) -> dict:
     return {"validate_response_result": "Rejected", "feedback": feedback}
 
 def llm_call_short_version_generator(state: State_StructuredAnswer) -> dict:
+    writer = get_stream_writer()  
+    writer({"action": "Generating av short version for the user query"})
+    
     llm = state["llm"]
     query = state["query"]
     msg = llm.invoke(
@@ -76,6 +83,8 @@ def llm_call_short_version_generator(state: State_StructuredAnswer) -> dict:
 
 
 def llm_call_summary_generator(state: State_StructuredAnswer) -> dict:
+    writer = get_stream_writer()  
+    writer({"action": "Generating av summary for the user query"})
     llm = state["llm"]
     query = state["query"]
     msg = llm.invoke(
@@ -84,6 +93,8 @@ def llm_call_summary_generator(state: State_StructuredAnswer) -> dict:
     return {"query_summary": msg.content}
 
 def calculate_readability_index(state: State_StructuredAnswer) -> dict:
+    writer = get_stream_writer()  
+    writer({"action": "Calculating the readability index"})
     text = state["answer"]
     words = text.split()
     num_words = len(words) or 1
@@ -99,6 +110,8 @@ def calculate_readability_index(state: State_StructuredAnswer) -> dict:
 
 
 def readability_evaluator(state: State_StructuredAnswer) -> dict:
+    writer = get_stream_writer()  
+    writer({"action": "Evaluate the readability index"})
     # Pull in all three updates from the helper
     updates = calculate_readability_index(state)
     # Optional: log the new values
@@ -127,6 +140,8 @@ def readability_evaluator(state: State_StructuredAnswer) -> dict:
 
 
 def llm_make_answer_more_readable(state: State_StructuredAnswer) -> dict:
+    writer = get_stream_writer()  
+    writer({"action": "Make the answer more readable"})
     llm = state["llm"]
     answer = state["answer"]
     feedback = state["feedback"]
@@ -149,6 +164,8 @@ def response_builder_node(state: State_StructuredAnswer) -> dict:
 
 
 def references_generator(state: State_StructuredAnswer) -> dict:
+    writer = get_stream_writer()  
+    writer({"action": "Building a list of references"})
     cutoff = state["similarity_cutoff"]
     refs: List[Reference] = []
     for node in state["response"].source_nodes:
@@ -163,6 +180,8 @@ def references_generator(state: State_StructuredAnswer) -> dict:
 
 
 def aggregator(state: State_StructuredAnswer) -> dict:
+    writer = get_stream_writer()  
+    writer({"action": "Aggregate the final response"})
     
     if state["validate_response_result"] == "Rejected":
         feedback = state["feedback"] 
@@ -177,7 +196,9 @@ def aggregator(state: State_StructuredAnswer) -> dict:
             combined += "## Referanser\n"
             for r in state['references']:
                 combined += f"- [{r['name']}]({r['url']}) (Relevans: {r['relevance_index']:.2f})\n"
-        return {"structured_answer": combined}
+        
+        writer({"final_answer": combined}) 
+        return {"final_answer": combined}
 
 
 # === Build static, stateless workflow ===

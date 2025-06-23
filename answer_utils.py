@@ -8,11 +8,11 @@ from llama_index.core import ChatPromptTemplate, get_response_synthesizer, Vecto
 import logging
 import anyio
 
-def get_answer_structured(
+async def get_answer_structured_as_stream(
     query_settings: QuerySettings,
     server_settings: ServerSettings,
     vector_store: VectorIndexStore
-) -> str:
+):
     # 1) Try to load the requested index
     vec_name = query_settings.vectorIndex
     entry = vector_store.get(vec_name)
@@ -100,17 +100,17 @@ def get_answer_structured(
         "num_iterations": 0,
     }
 
-    final_state = optimizer_workflow.invoke(init_state)
+
+    # ✅ This is  an **async generator**
+    async for chunk in optimizer_workflow.astream(init_state, stream_mode="custom"):
+        yield chunk
 
 
-    # 6) Return the raw string
-    return final_state["structured_answer"]
-
-async def get_answer_with_subqueries_stream(
+async def get_answer_with_subqueries_as_stream(
     query_settings: QuerySettings,
     server_settings: ServerSettings,
     vector_store: VectorIndexStore
-) -> str:
+):
     # 1) Try to load the requested index
     vec_name = query_settings.vectorIndex
     entry = vector_store.get(vec_name)
@@ -190,6 +190,6 @@ async def get_answer_with_subqueries_stream(
 
     }
 
-    # ✅ This is now an **async generator**
+    # ✅ This is  an **async generator**
     async for chunk in orchestrator_worker.astream(init_state, stream_mode="custom"):
         yield chunk
