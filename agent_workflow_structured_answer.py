@@ -6,7 +6,7 @@ from typing_extensions import TypedDict
 
 from llama_index.core.base.response.schema import Response
 from llama_index.core.query_engine import BaseQueryEngine
-
+from langgraph.config import get_stream_writer
 from langgraph.graph import StateGraph, START, END
 
 
@@ -16,7 +16,7 @@ class Reference(TypedDict):
     url: str
     relevance_index: float
 
-class State(TypedDict):
+class State_StructuredAnswer(TypedDict):
     llm: any  # LLM client (from server_settings.get_llm())
     query_engine: BaseQueryEngine
     vector_index_description: str
@@ -32,7 +32,7 @@ class State(TypedDict):
     references: List[Reference]
     query_short_version: str
     query_summary: str
-    structured_answer: str
+    final_answer: str
     num_iterations: int
 
 
@@ -51,11 +51,15 @@ def categorize_lix(lix: float) -> str:
 
 # === Node functions ===
 
-def llm_call_answer(state: State) -> dict:
+def llm_call_answer(state: State_StructuredAnswer) -> dict:
     response_obj = state["query_engine"].query(state["query"])
+    writer = get_stream_writer()  
+    writer({"action": "Calling llm to get the initial answer"})
     return {"answer": response_obj.response, "response": response_obj}
 
-def validate_response(state: State) -> dict:
+def validate_response(state: State_StructuredAnswer) -> dict:
+    writer = get_stream_writer()  
+    writer({"action": "Validating the response"})
     cutoff = state["similarity_cutoff"]
     nodes = [n for n in state["response"].source_nodes if n.score is not None]
     for n in nodes:
@@ -66,7 +70,10 @@ def validate_response(state: State) -> dict:
     feedback = f'Jeg beklager! {vector_index_desc}. Hvis du har spørsmål om disse emnene, kan jeg prøve å hjelpe deg med det. Bare gi meg beskjed om hva du lurer på!'
     return {"validate_response_result": "Rejected", "feedback": feedback}
 
-def llm_call_short_version_generator(state: State) -> dict:
+def llm_call_short_version_generator(state: State_StructuredAnswer) -> dict:
+    writer = get_stream_writer()  
+    writer({"action": "Generating av short version for the user query"})
+    
     llm = state["llm"]
     query = state["query"]
     msg = llm.invoke(
@@ -75,7 +82,9 @@ def llm_call_short_version_generator(state: State) -> dict:
     return {"query_short_version": msg.content}
 
 
-def llm_call_summary_generator(state: State) -> dict:
+def llm_call_summary_generator(state: State_StructuredAnswer) -> dict:
+    writer = get_stream_writer()  
+    writer({"action": "Generating av summary for the user query"})
     llm = state["llm"]
     query = state["query"]
     msg = llm.invoke(
@@ -83,7 +92,9 @@ def llm_call_summary_generator(state: State) -> dict:
     )
     return {"query_summary": msg.content}
 
-def calculate_readability_index(state: State) -> dict:
+def calculate_readability_index(state: State_StructuredAnswer) -> dict:
+    writer = get_stream_writer()  
+    writer({"action": "Calculating the readability index"})
     text = state["answer"]
     words = text.split()
     num_words = len(words) or 1
@@ -98,7 +109,9 @@ def calculate_readability_index(state: State) -> dict:
 
 
 
-def readability_evaluator(state: State) -> dict:
+def readability_evaluator(state: State_StructuredAnswer) -> dict:
+    writer = get_stream_writer()  
+    writer({"action": "Evaluate the readability index"})
     # Pull in all three updates from the helper
     updates = calculate_readability_index(state)
     # Optional: log the new values
@@ -126,7 +139,9 @@ def readability_evaluator(state: State) -> dict:
 
 
 
-def llm_make_answer_more_readable(state: State) -> dict:
+def llm_make_answer_more_readable(state: State_StructuredAnswer) -> dict:
+    writer = get_stream_writer()  
+    writer({"action": "Make the answer more readable"})
     llm = state["llm"]
     answer = state["answer"]
     feedback = state["feedback"]
@@ -135,20 +150,22 @@ def llm_make_answer_more_readable(state: State) -> dict:
     return {"answer": msg.content, "num_iterations": new_count}
 
 
-def route_answer(state: State) -> str:
+def route_answer(state: State_StructuredAnswer) -> str:
     return "Accepted" if state["readable_or_not"] == "readable" else "Rejected + Feedback"
 
 
-def on_reject_build_structured(state: State) -> dict:
+def on_reject_build_structured(state: State_StructuredAnswer) -> dict:
     print("rejected")
     # exactly what aggregator does:
     return aggregator(state)
 
-def response_builder_node(state: State) -> dict:
+def response_builder_node(state: State_StructuredAnswer) -> dict:
     return {}
 
 
-def references_generator(state: State) -> dict:
+def references_generator(state: State_StructuredAnswer) -> dict:
+    writer = get_stream_writer()  
+    writer({"action": "Building a list of references"})
     cutoff = state["similarity_cutoff"]
     refs: List[Reference] = []
     for node in state["response"].source_nodes:
@@ -162,7 +179,9 @@ def references_generator(state: State) -> dict:
     return {"references": refs}
 
 
-def aggregator(state: State) -> dict:
+def aggregator(state: State_StructuredAnswer) -> dict:
+    writer = get_stream_writer()  
+    writer({"action": "Aggregate the final response"})
     
     if state["validate_response_result"] == "Rejected":
         feedback = state["feedback"] 
@@ -177,11 +196,13 @@ def aggregator(state: State) -> dict:
             combined += "## Referanser\n"
             for r in state['references']:
                 combined += f"- [{r['name']}]({r['url']}) (Relevans: {r['relevance_index']:.2f})\n"
-        return {"structured_answer": combined}
+        
+        writer({"final_answer": combined}) 
+        return {"final_answer": combined}
 
 
 # === Build static, stateless workflow ===
-builder = StateGraph(State)
+builder = StateGraph(State_StructuredAnswer)
 
 # 1️⃣ Core answer + validation
 builder.add_node("llm_call_answer", llm_call_answer)

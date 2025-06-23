@@ -91,15 +91,10 @@ vector_store = VectorIndexStore()
 
 
 VECTOR_INDEX_MAP = [
-    {
-        "name": "helsenorgeartikler",
-        "storage": ("." if RunningLocally() else "") + "/blobstorage/chatbot/helsenorgeartikler",
-        "description": (
-            "Jeg svarer på spørsmål om flere artikler på "
-            "helsenorge om helsespørsmål som graviditet, rus, "
-            "tobakk, graviditet og sykdommer"
-        ),
-    },
+    {"name": "ungnotobakk", "storage": ("." if RunningLocally() else "") +"/blobstorage/chatbot/ungnotobakk", "description":"Jeg svarer på spørsmål om tobakk, snus, vaping"},
+    {"name": "ungnospmtobakk", "storage": ("." if RunningLocally() else "") +"/blobstorage/chatbot/ungnospmtobakk", "description":"Jeg svarer på spørsmål om tobakk, snus, vaping"}, 
+    {"name": "ungnospm", "storage": ("." if RunningLocally() else "") +"/blobstorage/chatbot/ungnospm", "description":"Jeg svarer på spørsmål ulike temaer som ungdommer lurer på"},     
+    {"name": "helsenorgeartikler", "storage": ("." if RunningLocally() else "") +"/blobstorage/chatbot/helsenorgeartikler", "description":"Jeg svarer på spørsmål om flere artikler på helsenorge om helsespørsmål som graviditet, rus, tobakk, graviditet og sykdommer"},
 ]
 
 
@@ -110,7 +105,7 @@ LLMGPT4 = AzureChatOpenAI(
     api_key=os.getenv('AZURE_OPENAI_API_KEY'),
     azure_endpoint=os.getenv('AZURE_OPENAI_AZURE_ENDPOINT'),
     api_version=os.getenv('AZURE_OPENAI_API_VERSJON'),
-    temperature=0.0,
+    #temperature=0.0,
     timeout=120,
 )
 

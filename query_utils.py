@@ -10,7 +10,7 @@ class QuerySettings:
         self.similarity_cutoff = float(kwargs.get('similarity_cutoff', 0.7))  # Default to float
         self.vectorIndex = kwargs.get('vectorIndex', "None")
         self.user_content = kwargs.get('user_content', "")
-        self.agent = kwargs.get('agent', "agent_workflow_structured_answer")
+        self.agent = kwargs.get('agent', "subqueries")
 
     def __str__(self):
         # Convert object properties to a JSON string
@@ -23,7 +23,7 @@ def get_query_settings(json_request):
         similarity_top_k=json_request.get('similarity_top_k', 10),
         similarity_cutoff=json_request.get('similarity_cutoff', 0.7),
         vectorIndex=json_request.get('vectorIndex', "helsenorgeartikler"),
-        agent = json_request.get('agent', "agent_workflow_structured_answer")
+        agent = json_request.get('agent', "subqueries")
     )
     
     # Messages extraction - more Pythonic way to handle potential missing data

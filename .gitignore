@@ -10,7 +10,7 @@
 *.xlsm
 *.xlsx
 
-blobstorage/chatbot/helsenorgeartikler/*.json
+blobstorage/chatbot/*/*.json
 
 # Python-specific exclusions
 __pycache__/
