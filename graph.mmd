@@ -1,0 +1,36 @@
+---
+config:
+  flowchart:
+    curve: linear
+---
+graph TD;
+	__start__([<p>__start__</p>]):::first
+	llm_call_answer(llm_call_answer)
+	validate_response(validate_response)
+	aggregator(aggregator)
+	collect_all_metadata(collect_all_metadata)
+	llm_call_short_version_generator(llm_call_short_version_generator)
+	llm_call_summary_generator(llm_call_summary_generator)
+	references_generator(references_generator)
+	metadata_ready(metadata_ready)
+	readability_evaluator(readability_evaluator)
+	llm_make_answer_more_readable(llm_make_answer_more_readable)
+	__end__([<p>__end__</p>]):::last
+	__start__ --> llm_call_answer;
+	collect_all_metadata --> llm_call_short_version_generator;
+	collect_all_metadata --> llm_call_summary_generator;
+	collect_all_metadata --> references_generator;
+	llm_call_answer --> validate_response;
+	llm_call_short_version_generator --> metadata_ready;
+	llm_call_summary_generator --> metadata_ready;
+	llm_make_answer_more_readable --> readability_evaluator;
+	metadata_ready --> readability_evaluator;
+	readability_evaluator -. &nbsp;ok&nbsp; .-> aggregator;
+	readability_evaluator -. &nbsp;revise&nbsp; .-> llm_make_answer_more_readable;
+	references_generator --> metadata_ready;
+	validate_response -. &nbsp;Rejected&nbsp; .-> aggregator;
+	validate_response -. &nbsp;Accepted&nbsp; .-> collect_all_metadata;
+	aggregator --> __end__;
+	classDef default fill:#f2f0ff,line-height:1.2
+	classDef first fill-opacity:0
+	classDef last fill:#bfb6fc
