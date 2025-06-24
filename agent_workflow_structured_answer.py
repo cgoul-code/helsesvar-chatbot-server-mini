@@ -208,7 +208,7 @@ builder.add_edge("aggregator", END)
 optimizer_workflow = builder.compile()
 
 # produce graph.mmd that visualizes the workflow
-from graph_utils import save_mermaid_diagram
-save_mermaid_diagram(optimizer_workflow.get_graph())
+# from graph_utils import save_mermaid_diagram
+# save_mermaid_diagram(optimizer_workflow.get_graph())
 
 logging.info("optimizer_workflow created...")
