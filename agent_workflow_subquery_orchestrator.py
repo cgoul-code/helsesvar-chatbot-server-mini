@@ -132,13 +132,14 @@ def synthesizer(state: State_SubqueryOrchestrator):
     aggregated_answer = llm.invoke(
         [
             SystemMessage(
-                content="from this list of answers, reorganize a final answer. Use markdown formatting."
+                content="from this list of answers, reorganize a final answer. Use markdown formatting. Do not change the section for Referanser."
             ),
             HumanMessage(
                 content=f"Here is the list of answers: {completed_report_answers}"
             ),
         ]
     )
+    print(f'Final answer: {aggregated_answer}')
     writer({"final_answer": aggregated_answer.content}) 
     return {"final_answer": aggregated_answer.content}
 
@@ -180,6 +181,5 @@ builder.add_edge("synthesizer", END)
 # Compile the workflow
 orchestrator_worker = builder.compile()
 
-# for chunk in orchestrator_worker.stream({"topic": "ice cream"}, stream_mode="updates"):
-#     print(chunk)
+
 
