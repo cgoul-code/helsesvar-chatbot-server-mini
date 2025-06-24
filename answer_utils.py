@@ -96,10 +96,12 @@ async def get_answer_structured_as_stream(
         "readable_or_not": "not readable",
         "feedback": "",
         "references": [],
-        "structured_answer": "",
+        "query_short_version": "", 
+        "query_summary": "",
+        "final_answer": "",
         "num_iterations": 0,
     }
-
+    
 
     # ✅ This is  an **async generator**
     async for chunk in optimizer_workflow.astream(init_state, stream_mode="custom"):
