@@ -1,14 +1,14 @@
 import os
 import re
+import json
 import logging
 from typing import List, Literal
-from typing_extensions import TypedDict
 
 from llama_index.core.base.response.schema import Response
 from llama_index.core.query_engine import BaseQueryEngine
 from langgraph.config import get_stream_writer
 from langgraph.graph import StateGraph, START, END
-
+from typing_extensions import TypedDict
 
 # === Data types ===
 class Reference(TypedDict):
@@ -17,7 +17,7 @@ class Reference(TypedDict):
     relevance_index: float
 
 class State_StructuredAnswer(TypedDict):
-    llm: any  # LLM client (from server_settings.get_llm())
+    llm: any
     query_engine: BaseQueryEngine
     vector_index_description: str
     query: str
@@ -36,7 +36,7 @@ class State_StructuredAnswer(TypedDict):
     num_iterations: int
 
 
-# === Helpers ===
+# === Helpers & Node functions ===
 def categorize_lix(lix: float) -> str:
     if lix < 25:
         return "Svært lettlest (for barn)"
@@ -49,216 +49,166 @@ def categorize_lix(lix: float) -> str:
     return "Svært vanskelig (vitenskapelig litteratur)"
 
 
-# === Node functions ===
+def llm_call_answer(state):
+    resp = state["query_engine"].query(state["query"])
+    get_stream_writer()({"action": "Calling llm to get the initial answer"})
+    return {"answer": resp.response, "response": resp}
 
-def llm_call_answer(state: State_StructuredAnswer) -> dict:
-    response_obj = state["query_engine"].query(state["query"])
-    writer = get_stream_writer()  
-    writer({"action": "Calling llm to get the initial answer"})
-    return {"answer": response_obj.response, "response": response_obj}
 
-def validate_response(state: State_StructuredAnswer) -> dict:
-    writer = get_stream_writer()  
-    writer({"action": "Validating the response"})
-    cutoff = state["similarity_cutoff"]
+def validate_response(state):
+    get_stream_writer()({"action": "Validating the response"})
     nodes = [n for n in state["response"].source_nodes if n.score is not None]
     for n in nodes:
-        if n.score >= cutoff:
+        if n.score >= state["similarity_cutoff"]:
             return {"validate_response_result": "Accepted"}
-        
-    vector_index_desc = state["vector_index_description"]
-    feedback = f'Jeg beklager! {vector_index_desc}. Hvis du har spørsmål om disse emnene, kan jeg prøve å hjelpe deg med det. Bare gi meg beskjed om hva du lurer på!'
+    feedback = (
+        f'Jeg beklager! {state["vector_index_description"]}. '
+        "Hvis du har spørsmål om disse emnene, kan jeg prøve å hjelpe deg. Gi beskjed!"
+    )
     return {"validate_response_result": "Rejected", "feedback": feedback}
 
-def llm_call_short_version_generator(state: State_StructuredAnswer) -> dict:
-    writer = get_stream_writer()  
-    writer({"action": "Generating av short version for the user query"})
-    
-    llm = state["llm"]
-    query = state["query"]
-    msg = llm.invoke(
-        f"Give a title in norwegian to the query, ensuring that the 'I' form is preserved: {query}, use only one short sentence"
+
+def llm_call_short_version_generator(state):
+    get_stream_writer()({"action": "Generating a short version"})
+    msg = state["llm"].invoke(
+        f"Gi en kort tittel på norsk, behold 'I'-formen: {state['query']}"
     )
     return {"query_short_version": msg.content}
 
 
-def llm_call_summary_generator(state: State_StructuredAnswer) -> dict:
-    writer = get_stream_writer()  
-    writer({"action": "Generating av summary for the user query"})
-    llm = state["llm"]
-    query = state["query"]
-    msg = llm.invoke(
-        f"Please provide a summary of the user's question in norwegian, ensuring that the 'I' form is preserved : {query}, use only one sentence"
+def llm_call_summary_generator(state):
+    get_stream_writer()({"action": "Generating a summary"})
+    msg = state["llm"].invoke(
+        f"Oppsummer spørsmålet på norsk i én setning, behold 'I'-formen: {state['query']}"
     )
     return {"query_summary": msg.content}
 
-def calculate_readability_index(state: State_StructuredAnswer) -> dict:
-    writer = get_stream_writer()  
-    writer({"action": "Calculating the readability index"})
-    text = state["answer"]
-    words = text.split()
-    num_words = len(words) or 1
-    num_sentences = max(len(re.split(r'[.!?]', text)) - 1, 1)
-    num_long = sum(1 for w in words if len(re.sub(r'[^a-zA-Z]', '', w)) > 6)
-    lix = (num_words / num_sentences) + (num_long / num_words) * 100
 
-    return {
-        "lix_score": lix,
-        "lix_category": categorize_lix(lix),
-    }
-
-
-
-def readability_evaluator(state: State_StructuredAnswer) -> dict:
-    writer = get_stream_writer()  
-    writer({"action": "Evaluate the readability index"})
-    # Pull in all three updates from the helper
-    updates = calculate_readability_index(state)
-    # Optional: log the new values
-    print(f'index: {updates["lix_score"]:.2f}, antall {state["num_iterations"]}')
-
-    # Build the base of what we’ll return
-    result = {
-        # merge in the new lix 
-        **updates
-    }
-
-    # Decide whether we need another pass
-    if (updates["lix_score"] > 35) and (state["num_iterations"] < 4):
-        result.update({
-            "readable_or_not": "not readable",
-            "feedback": "Make this text more readable by using shorter sentences, fewer words, and simpler language."
-        })
-    else:
-        result.update({
-            "readable_or_not": "readable",
-            "feedback": "No need for improvements"
-        })
-
-    return result
-
-
-
-def llm_make_answer_more_readable(state: State_StructuredAnswer) -> dict:
-    writer = get_stream_writer()  
-    writer({"action": "Make the answer more readable"})
-    llm = state["llm"]
-    answer = state["answer"]
-    feedback = state["feedback"]
-    msg = llm.invoke(f"Improve readability: {answer}. Feedback: {feedback}")
-    new_count = state["num_iterations"] + 1
-    return {"answer": msg.content, "num_iterations": new_count}
-
-
-def route_answer(state: State_StructuredAnswer) -> str:
-    return "Accepted" if state["readable_or_not"] == "readable" else "Rejected + Feedback"
-
-
-def on_reject_build_structured(state: State_StructuredAnswer) -> dict:
-    print("rejected")
-    # exactly what aggregator does:
-    return aggregator(state)
-
-def response_builder_node(state: State_StructuredAnswer) -> dict:
-    return {}
-
-
-def references_generator(state: State_StructuredAnswer) -> dict:
-    writer = get_stream_writer()  
-    writer({"action": "Building a list of references"})
+def references_generator(state):
+    get_stream_writer()({"action": "Building references"})
     cutoff = state["similarity_cutoff"]
-    refs: List[Reference] = []
-    for node in state["response"].source_nodes:
-        if node.score is not None and node.score >= cutoff:
-            meta = node.metadata
+    refs = []
+    for n in state["response"].source_nodes:
+        if n.score is not None and n.score >= cutoff:
+            m = n.metadata
             refs.append({
-                "name": meta.get('title', 'Ingen tittel').lstrip(),
-                "url": meta.get('url', 'Ingen URL'),
-                "relevance_index": node.score
+                "name": m.get("title", "Ingen tittel").lstrip(),
+                "url": m.get("url", "Ingen URL"),
+                "relevance_index": n.score
             })
     return {"references": refs}
 
 
-def aggregator(state: State_StructuredAnswer) -> dict:
-    writer = get_stream_writer()  
-    writer({"action": "Aggregate the final response"})
-    
+def calculate_readability_index(state):
+    text = state["answer"]
+    words = text.split()
+    num_words = len(words) or 1
+    num_sentences = max(len(re.split(r"[.!?]", text)) - 1, 1)
+    num_long = sum(1 for w in words if len(re.sub(r"[^a-zA-Z]", "", w)) > 6)
+    lix = (num_words / num_sentences) + (num_long / num_words) * 100
+    return {"lix_score": lix, "lix_category": categorize_lix(lix)}
+
+
+def readability_evaluator(state):
+    get_stream_writer()({"action": "Evaluating readability"})
+    updates = calculate_readability_index(state)
+    if updates["lix_score"] > 35 and state["num_iterations"] < 4:
+        return {
+            **updates,
+            "readable_or_not": "not readable",
+            "feedback": "Make this text more readable: shorter sentences & simpler language."
+        }
+    return {
+        **updates,
+        "readable_or_not": "readable",
+        "feedback": "No need for improvements"
+    }
+
+
+def llm_make_answer_more_readable(state):
+    get_stream_writer()({"action": "Making answer more readable"})
+    msg = state["llm"].invoke(
+        f"Improve readability: {state['answer']}. Feedback: {state['feedback']}"
+    )
+    return {"answer": msg.content, "num_iterations": state["num_iterations"] + 1}
+
+
+def aggregator(state):
+    get_stream_writer()({"action": "Aggregating final response"})
     if state["validate_response_result"] == "Rejected":
-        feedback = state["feedback"] 
-        return {"structured_answer": feedback}
-    else:
-        combined = f"# Oppsummering av spørsmålet\n\n"
-        combined += f"## Spørsmålet fra brukeren\n{state['query']}\n\n"
-        combined += f"## Tittel\n{state['query_short_version']}\n\n"
-        combined += f"## Kort sammendrag av spørsmålet\n{state['query_summary']}\n\n"
-        combined += f"## Lettlest svar\n{state['answer']}\n\n"
-        if state['references']:
-            combined += "## Referanser\n"
-            for r in state['references']:
-                combined += f"- [{r['name']}]({r['url']}) (Relevans: {r['relevance_index']:.2f})\n"
-        
-        writer({"final_answer": combined}) 
-        return {"final_answer": combined}
+        return {"final_answer": state["feedback"]}
+    parts = [
+        "# Oppsummering av spørsmålet\n\n",
+        "## Spørsmålet\n", state["query"], "\n\n",
+        "## Tittel\n", state["query_short_version"], "\n\n",
+        "## Sammendrag\n", state["query_summary"], "\n\n",
+        "## Svar\n", state["answer"], "\n\n"
+    ]
+    if state["references"]:
+        parts.append("## Referanser\n")
+        for r in state["references"]:
+            parts.append(
+                f"- [{r['name']}]({r['url']}) (Relevans: {r['relevance_index']:.2f})\n"
+            )
+    get_stream_writer()({"final_answer": "".join(parts)})
+    return {"final_answer": "".join(parts)}
 
 
-# === Build static, stateless workflow ===
+def collect_all_metadata(state):
+    # no-op sink for fan-out
+    return {}
+
+
+# === Build the StateGraph ===
 builder = StateGraph(State_StructuredAnswer)
 
-# 1️⃣ Core answer + validation
+# 1) Answer + validation
 builder.add_node("llm_call_answer", llm_call_answer)
 builder.add_node("validate_response", validate_response)
 builder.add_edge(START, "llm_call_answer")
 builder.add_edge("llm_call_answer", "validate_response")
 
-# 2️⃣ Branch on validation result:
-#    - "Rejected" → aggregator
-#    - "Accepted" → fan-out into 4 nodes
+# 2) Rejection shortcut
 builder.add_node("aggregator", aggregator)
+builder.add_conditional_edges(
+    "validate_response",
+    lambda s: "Rejected" if s["validate_response_result"]=="Rejected" else "Accepted",
+    {"Rejected": "aggregator", "Accepted": "collect_all_metadata"}
+)
+
+# 3) Metadata fan-out
+builder.add_node("collect_all_metadata", collect_all_metadata)
 builder.add_node("llm_call_short_version_generator", llm_call_short_version_generator)
 builder.add_node("llm_call_summary_generator", llm_call_summary_generator)
 builder.add_node("references_generator", references_generator)
+builder.add_edge("collect_all_metadata", "llm_call_short_version_generator")
+builder.add_edge("collect_all_metadata", "llm_call_summary_generator")
+builder.add_edge("collect_all_metadata", "references_generator")
+
+# 4) Join metadata → metadata_ready
+builder.add_node("metadata_ready", lambda s: {})
+builder.add_edge("llm_call_short_version_generator", "metadata_ready")
+builder.add_edge("llm_call_summary_generator", "metadata_ready")
+builder.add_edge("references_generator", "metadata_ready")
+
+# 5) Readability loop
 builder.add_node("readability_evaluator", readability_evaluator)
-
-builder.add_conditional_edges(
-    "validate_response",
-    # router: return exactly the keys below
-    lambda s: "Rejected" if s["validate_response_result"] == "Rejected"
-              else "Accepted",
-    {
-        "Rejected": "aggregator",
-        "Accepted": "llm_call_short_version_generator",
-    }
-)
-
-# 3️⃣ Fan-out the Accepted branch into the other 3 nodes
-#    (these edges will only fire when validate_response_result == "Accepted")
-builder.add_edge("validate_response", "llm_call_summary_generator")
-builder.add_edge("validate_response", "references_generator")
-builder.add_edge("validate_response", "readability_evaluator")
-
-builder.add_edge("llm_call_short_version_generator", "aggregator")
-builder.add_edge("llm_call_summary_generator", "aggregator")
-builder.add_edge("references_generator", "aggregator")
-
-# 4️⃣ Readability loop
 builder.add_node("llm_make_answer_more_readable", llm_make_answer_more_readable)
+builder.add_edge("metadata_ready", "readability_evaluator")
 builder.add_conditional_edges(
     "readability_evaluator",
-    lambda s: "ok" if s["readable_or_not"] == "readable" else "revise",
-    {
-        "ok":     "aggregator",
-        "revise": "llm_make_answer_more_readable",
-    }
+    lambda s: "ok"     if s["readable_or_not"]=="readable" else "revise",
+    {"ok": "aggregator", "revise": "llm_make_answer_more_readable"}
 )
 builder.add_edge("llm_make_answer_more_readable", "readability_evaluator")
 
-# 5️⃣ Finally, aggregator → END
+# 6) Finish
 builder.add_edge("aggregator", END)
 
 optimizer_workflow = builder.compile()
 
 # produce graph.mmd that visualizes the workflow
-#from graph_utils import save_mermaid_diagram
-#save_mermaid_diagram(optimizer_workflow.get_graph())
+from graph_utils import save_mermaid_diagram
+save_mermaid_diagram(optimizer_workflow.get_graph())
 
 logging.info("optimizer_workflow created...")
