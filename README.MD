@@ -96,7 +96,8 @@ A server application demonstrating Retrieval-Augmented Generation (RAG) with Azu
    ├── answer_utils.py                          # Query handling and answer generation
    ├── query_utils.py                           # Query parsing utilities
    ├── routes/                                  # HTTP route definitions
-   ├── agent_workflow_structured_answer.py      # Agent workflow implementation
+   ├── agent_workflow_structured_answer.py      # Agent workflow implementation that orchestrates multi-step reasoning, composing responses with sections for short name, summary, answer, and references.
+   ├── agent_workflow_subquery_orchestrator.py  # Agent workflow implementation that decomposes the initial query into subqueries, answers each independently, then synthesizes a cohesive final answer
    └── blobstorage/chatbot/helsenorgeartikler   # Indexed article data
 ```
 
