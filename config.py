@@ -10,6 +10,9 @@ from llama_index.core import (StorageContext, load_index_from_storage)
 from collections import namedtuple
 import asyncio
 
+from dotenv import load_dotenv, find_dotenv
+load_dotenv(find_dotenv(), override=False)
+
 # define the namedtuple at module scope
 IndexObject = namedtuple('IndexObject', ['name', 'index', 'description'])
 
@@ -95,6 +98,7 @@ VECTOR_INDEX_MAP = [
     # {"name": "ungnospmtobakk", "storage": ("." if RunningLocally() else "") +"/blobstorage/chatbot/ungnospmtobakk", "description":"Jeg svarer på spørsmål om tobakk, snus, vaping"}, 
     # {"name": "ungnospm", "storage": ("." if RunningLocally() else "") +"/blobstorage/chatbot/ungnospm", "description":"Jeg svarer på spørsmål ulike temaer som ungdommer lurer på"},     
     {"name": "helsenorgeartikler", "storage": ("." if RunningLocally() else "") +"/blobstorage/chatbot/helsenorgeartikler", "description":"Jeg svarer på spørsmål om flere artikler på helsenorge om helsespørsmål som graviditet, rus, tobakk, graviditet og sykdommer"},
+    {"name": "hvaerinnafor", "storage": ("." if RunningLocally() else "") +"/blobstorage/chatbot/hvaerinnafor", "description":"Jeg svarer på spørsmål om problematisk eller skadelig seksuell adferd med korte tekster"},
 ]
 
 
@@ -104,7 +108,7 @@ LLMGPT4 = AzureChatOpenAI(
     azure_deployment=os.getenv('AZURE_OPENAI_DEPLOYMENT_NAME'),
     api_key=os.getenv('AZURE_OPENAI_API_KEY'),
     azure_endpoint=os.getenv('AZURE_OPENAI_AZURE_ENDPOINT'),
-    api_version=os.getenv('AZURE_OPENAI_API_VERSJON'),
+    api_version=os.getenv('AZURE_OPENAI_API_VERSION'),
     #temperature=0.0,
     timeout=120,
 )
@@ -114,7 +118,6 @@ server_settings.set_llm(LLMGPT4)
 
 
 def init_env_and_logging():
-    load_dotenv()
     logging.basicConfig(
         level=logging.INFO if RunningLocally() else logging.INFO,
         format="%(asctime)s - %(levelname)s - %(message)s",
