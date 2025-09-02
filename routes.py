@@ -2,7 +2,14 @@ from quart import request, jsonify, Response
 import logging
 from config import (server_settings, vector_store)
 from query_utils import (get_query_settings)
-from answer_utils import (get_answer)
+from answer_utils import get_structured_answer, get_answer_with_related_queries
+
+# Agent registry: kartlegger agent-navn til funksjon
+AGENT_REGISTRY = {
+    "hvaerinnafor": get_answer_with_related_queries,
+    "structured": get_structured_answer,
+    # legg til flere agenter her…
+}
 
 def register_routes(app):
     @app.route("/chat", methods=["POST"])
@@ -20,7 +27,16 @@ def register_routes(app):
             # your real logic here...
             
             query_settings = get_query_settings(json_request)
-            answer = get_answer(query_settings, server_settings, vector_store)
+            
+              # --- 4) Velg riktig agent-funksjon ---
+            agent_name = query_settings.agent
+            agent_fn = AGENT_REGISTRY.get(agent_name)
+            print(f'------->(name:{agent_name}, fn:{agent_fn})<--------------')
+            if agent_fn is None:
+                logging.error(f"Unknown agent requested: {agent_name}")
+                return {"error": f"Unknown agent '{agent_name}'"}, 400
+            
+            answer = agent_fn(query_settings, server_settings, vector_store)
             return {"answer": answer}, 200
         
         except Exception as e:

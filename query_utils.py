@@ -10,7 +10,7 @@ class QuerySettings:
         self.similarity_cutoff = float(kwargs.get('similarity_cutoff', 0.7))  # Default to float
         self.vectorIndex = kwargs.get('vectorIndex', "None")
         self.user_content = kwargs.get('user_content', "")
-        self.agent = kwargs.get('agent', "subqueries")
+        self.agent = kwargs.get('agent', "structured")
 
     def __str__(self):
         # Convert object properties to a JSON string

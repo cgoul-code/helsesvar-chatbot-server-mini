@@ -16,7 +16,7 @@ class Reference(TypedDict):
     url: str
     relevance_index: float
 
-class State(TypedDict):
+class State_StructuredAnswer(TypedDict):
     llm: any  # LLM client (from server_settings.get_llm())
     query_engine: BaseQueryEngine
     vector_index_description: str
@@ -50,11 +50,11 @@ def categorize_lix(lix: float) -> str:
 
 # === Node functions ===
 
-def llm_call_answer(state: State) -> dict:
+def llm_call_answer(state: State_StructuredAnswer) -> dict:
     response_obj = state["query_engine"].query(state["query"])
     return {"answer": response_obj.response, "response": response_obj}
 
-def validate_response(state: State) -> dict:
+def validate_response(state: State_StructuredAnswer) -> dict:
     cutoff = state["similarity_cutoff"]
     nodes = [n for n in state["response"].source_nodes if n.score is not None]
     for n in nodes:
@@ -65,7 +65,7 @@ def validate_response(state: State) -> dict:
     feedback = f'Jeg beklager! {vector_index_desc}. Hvis du har spørsmål om disse emnene, kan jeg prøve å hjelpe deg med det. Bare gi meg beskjed om hva du lurer på!'
     return {"validate_response_result": "Rejected", "feedback": feedback}
 
-def llm_call_short_version_generator(state: State) -> dict:
+def llm_call_short_version_generator(state: State_StructuredAnswer) -> dict:
     llm = state["llm"]
     query = state["query"]
     msg = llm.invoke(
@@ -74,7 +74,7 @@ def llm_call_short_version_generator(state: State) -> dict:
     return {"query_short_version": msg.content}
 
 
-def llm_call_summary_generator(state: State) -> dict:
+def llm_call_summary_generator(state: State_StructuredAnswer) -> dict:
     llm = state["llm"]
     query = state["query"]
     msg = llm.invoke(
@@ -82,7 +82,7 @@ def llm_call_summary_generator(state: State) -> dict:
     )
     return {"query_summary": msg.content}
 
-def calculate_readability_index(state: State) -> None:
+def calculate_readability_index(state: State_StructuredAnswer) -> None:
     text = state["answer"]
     words = text.split()
     num_words = len(words) or 1
@@ -93,7 +93,7 @@ def calculate_readability_index(state: State) -> None:
     state["lix_category"] = categorize_lix(lix)
 
 
-def readability_evaluator(state: State) -> dict:
+def readability_evaluator(state: State_StructuredAnswer) -> dict:
     calculate_readability_index(state)
     if state["lix_score"] > 50:
         return {
@@ -103,7 +103,7 @@ def readability_evaluator(state: State) -> dict:
     return {"readable_or_not": "readable", "feedback": "No need for improvements"}
 
 
-def llm_make_answer_more_readable(state: State) -> dict:
+def llm_make_answer_more_readable(state: State_StructuredAnswer) -> dict:
     llm = state["llm"]
     answer = state["answer"]
     feedback = state["feedback"]
@@ -111,20 +111,20 @@ def llm_make_answer_more_readable(state: State) -> dict:
     return {"answer": msg.content}
 
 
-def route_answer(state: State) -> str:
+def route_answer(state: State_StructuredAnswer) -> str:
     return "Accepted" if state["readable_or_not"] == "readable" else "Rejected + Feedback"
 
 
-def on_reject_build_structured(state: State) -> dict:
+def on_reject_build_structured(state: State_StructuredAnswer) -> dict:
     print("rejected")
     # exactly what aggregator does:
     return aggregator(state)
 
-def response_builder_node(state: State) -> dict:
+def response_builder_node(state: State_StructuredAnswer) -> dict:
     return {}
 
 
-def references_generator(state: State) -> dict:
+def references_generator(state: State_StructuredAnswer) -> dict:
     cutoff = state["similarity_cutoff"]
     refs: List[Reference] = []
     for node in state["response"].source_nodes:
@@ -138,7 +138,7 @@ def references_generator(state: State) -> dict:
     return {"references": refs}
 
 
-def aggregator(state: State) -> dict:
+def aggregator(state: State_StructuredAnswer) -> dict:
     
     if state["validate_response_result"] == "Rejected":
         feedback = state["feedback"] 
@@ -157,7 +157,7 @@ def aggregator(state: State) -> dict:
 
 
 # === Build static, stateless workflow ===
-builder = StateGraph(State)
+builder = StateGraph(State_StructuredAnswer)
 
 # 1️⃣ Core answer + validation
 builder.add_node("llm_call_answer", llm_call_answer)
