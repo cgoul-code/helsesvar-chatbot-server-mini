@@ -10,13 +10,15 @@ graph TD;
 	validate_response(validate_response)
 	aggregator(aggregator)
 	references_generator(references_generator)
+	llm_call_related_queries(llm_call_related_queries)
 	__end__([<p>__end__</p>]):::last
 	__start__ --> llm_call_refine_query;
 	llm_call_answer --> validate_response;
 	llm_call_refine_query --> llm_call_answer;
-	references_generator --> aggregator;
-	validate_response -. &nbsp;Accepted&nbsp; .-> aggregator;
-	validate_response --> references_generator;
+	llm_call_related_queries --> aggregator;
+	references_generator --> llm_call_related_queries;
+	validate_response -. &nbsp;Rejected&nbsp; .-> aggregator;
+	validate_response -. &nbsp;Accepted&nbsp; .-> references_generator;
 	aggregator --> __end__;
 	classDef default fill:#f2f0ff,line-height:1.2
 	classDef first fill-opacity:0

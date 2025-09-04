@@ -7,6 +7,8 @@ from llama_index.core import ChatPromptTemplate, get_response_synthesizer, Vecto
 import logging
 import IPython
 
+
+
 def get_structured_answer(
     query_settings: QuerySettings,
     server_settings: ServerSettings,
@@ -154,7 +156,6 @@ def get_answer_with_related_queries(
                 "- If the context doesn't cover the question, clearly state that the information isn't available in the provided articles."
             )
         ),
-
         ChatMessage(
             role=MessageRole.USER,
             content=(
@@ -162,11 +163,13 @@ def get_answer_with_related_queries(
                 "---------------------\n"
                 "{context_str}\n"
                 "---------------------\n"
+                "Given the context information and not prior knowledge, "
                 "Query: {query_str}\n"
                 "Answer: "
-            )
+            ),
         ),
     ])
+
 
     # 3) Create the response synthesizer
     response_synthesizer = get_response_synthesizer(
@@ -256,17 +259,21 @@ def get_answer_with_related_queries(
         "ungdom og seksualitet"
     }
      # 6) define a related question template
-    text_rq_template =  ChatPromptTemplate(  [
+    text_rq_template = ChatPromptTemplate([
         ChatMessage(
             role=MessageRole.SYSTEM,
             content=(
                 "You will be provided with a user query.\n"
                 "Follow these steps to answer:\n"
-                f"Step 1: Classify the query into a maximum of 3 different categories using the following list of keywords: {keywords}.\n"
-                "Step 2: For each category from Step 1, use the given context to display 2 relevant questions in Norwegian.\n"
-                "Provide the answer using the following JSON format:\n"
-                #"[{\"Category name\": \"category\",\"Related questions\":\"question\",}...]\n"
-                "[{\"Category name\": \"category\",\"Related questions\":[\"question\",...]},...]\n"
+                f"Step-1: Classify the query into a maximum of 3 different categories using the following list of keywords: {keywords}.\n"
+                "Step-2: For each category from Step 1, use the given context to display 2 relevant questions in Norwegian.\n"
+                "Output requirements:\n"
+                "- Return JSON ONLY. No explanations. No markdown. No code fences.\n"
+                "- Use double quotes for all keys and strings.\n"
+                "- Do not include trailing commas.\n"
+                "- The relevant questions from Step-2 has to keep information of the context for from the initial user query, an example: if the user query concerns the sharing of nude images, and a relevant question from step-2 is about penalties, the relevant question should address penalties for sharing nude images.\n"
+                "- Shape:\n"
+                '[{"Category name": "category","Related questions":["question1","question2"]}, ...]\n'
             )
         ),
         ChatMessage(
@@ -281,7 +288,7 @@ def get_answer_with_related_queries(
                 "Answer: "
             ),
         ),
-        ])
+    ])
         
     response_related_queries_synthesizer = get_response_synthesizer(
         response_mode= "tree_summarize",
@@ -307,6 +314,7 @@ def get_answer_with_related_queries(
         "vector_index_description": vector_index_description,
         "query": query_settings.user_content,
         "similarity_cutoff": query_settings.similarity_cutoff,
+        "relevancy_cutoff" : query_settings.relevancy_cutoff,
         # defaults:
         "response": None,
         "answer": "",
