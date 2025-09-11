@@ -46,16 +46,19 @@ class State_AnswerWithRelatedQueries(TypedDict):
 
 # === Node functions ===
 def llm_call_refine_query(state: State_AnswerWithRelatedQueries) -> dict:
+
     llm = state["llm"]
     query = state["query"]
     msg = llm.invoke(
         f"Please refine the user's question in readable way in norwegian, ensuring that the 'I' form is preserved : {query}e"
     )
+    logging.info('---result---: llm_call_refine_query:', msg.content)
     return {"refinedQuery": msg.content}
 
 def llm_call_answer(state: State_AnswerWithRelatedQueries) -> dict:
     
     response_obj = state["query_engine"].query(state["refinedQuery"])
+    logging.info('---step---: llm_call_answer:', response_obj.response)
     return {"answer": response_obj.response, "response": response_obj}
 
 def llm_call_related_queries(state: State_AnswerWithRelatedQueries) -> dict:
@@ -99,6 +102,7 @@ def validate_response(state: State_AnswerWithRelatedQueries) -> dict:
     relevancy_cutoff = state["relevancy_cutoff"]
     nodes = [n for n in state["response"].source_nodes if n.score is not None]
     for n in nodes:
+        print(f'\nnode score: {n.score } ')
         if n.score >= relevancy_cutoff:
             return {"validate_response_result": "Accepted"}
         
@@ -208,7 +212,7 @@ builder.add_edge("aggregator", END)
 answer_with_related_queries_workflow = builder.compile()
 
 # produce graph.mmd that visualizes the workflow
-from graph_utils import save_mermaid_diagram
-save_mermaid_diagram(answer_with_related_queries_workflow.get_graph())
+#from graph_utils import save_mermaid_diagram
+#save_mermaid_diagram(answer_with_related_queries_workflow.get_graph())
 
 logging.info("answer_witth_related_queries_workflow created...")

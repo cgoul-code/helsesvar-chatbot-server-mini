@@ -1,6 +1,8 @@
 {
     "hvaerinnafor": {
+        "startUrls": [],  
         "aggressivePrune": true,
+        "clickElementsCssSelector": "main#main-content div.article button",
         "clientSideMinChangePercentage": 15,
         "crawlerType": "playwright:firefox",
         "debugLog": false,
@@ -8,11 +10,11 @@
         "dynamicContentWaitSecs": 20,
         "expandIframes": true,
         "htmlTransformer": "readableTextIfPossible",
-        "ignoreCanonicalUrl": true,
+        "ignoreCanonicalUrl": false,
         "initialConcurrency": 0,
-        "keepUrlFragments": true,
-        "maxConcurrency": 4,
-        "maxCrawlDepth": 100,
+        "keepUrlFragments": false,
+        "maxConcurrency": 200,
+        "maxCrawlDepth": 0,
         "maxCrawlPages": 1000,
         "maxRequestRetries": 5,
         "maxResults": 9999999,
@@ -20,10 +22,11 @@
         "maxSessionRotations": 10,
         "minFileDownloadSpeedKBps": 128,
         "proxyConfiguration": {
-          "useApifyProxy": true
+            "useApifyProxy": true
         },
         "readableTextCharThreshold": 100,
         "removeCookieWarnings": true,
+        "removeElementsCssSelector": "nav,footer,style,svg,\n[role=\"alert\"],\n[role=\"banner\"],\n[role=\"dialog\"],\n[role=\"alertdialog\"],\n[role=\"region\"][arial-label*=\"skip\" i],\n[aria-model=\"true\"],\n[role=\"button\"],\n[class=\"hint\"],\n[class=\"ChatCard__Wrapper-awfka5-0 ewwIAV\"],\n[class=\"ArticleComponent__QuestionSearchContainer-x4ymew-15 cvvXCt\"],\n[class=\"mui-style-h5fkc8\"],\n[id=\"cookie-consent\"],\n[class=\"element-invisible element-focusable\"],\n[class=\"Youtube__YouTubeContainer-sc-8wy72i-0 Umejn\"]",
         "renderingTypeDetectionPercentage": 10,
         "requestTimeoutSecs": 60,
         "saveFiles": false,
@@ -31,15 +34,11 @@
         "saveHtmlAsFile": false,
         "saveMarkdown": true,
         "saveScreenshots": false,
-        "startUrls": [],
         "useSitemaps": false,
         "includeUrlGlobs": [],
         "excludeUrlGlobs": [],
         "initialCookies": [],
         "waitForSelector": "",
-        "keepElementsCssSelector": "[class=\"_icon-display_1wqi0_3\"],\n._keyword-info-display-container_1hv56_1,\ndiv._svarside-container__text_14289_32:nth-child(2)",
-        "removeElementsCssSelector": "[class=\"_les-mer-list-wrapper_15sy7_3\"]",
-        "clickElementsCssSelector": "[aria-expanded=\"false\"]"
-  
+        "keepElementsCssSelector": ""
     }
 }
