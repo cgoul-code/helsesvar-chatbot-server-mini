@@ -1,0 +1,45 @@
+{
+    "hvaerinnafor": {
+        "aggressivePrune": true,
+        "clientSideMinChangePercentage": 15,
+        "crawlerType": "playwright:firefox",
+        "debugLog": false,
+        "debugMode": false,
+        "dynamicContentWaitSecs": 20,
+        "expandIframes": true,
+        "htmlTransformer": "readableTextIfPossible",
+        "ignoreCanonicalUrl": true,
+        "initialConcurrency": 0,
+        "keepUrlFragments": true,
+        "maxConcurrency": 4,
+        "maxCrawlDepth": 100,
+        "maxCrawlPages": 1000,
+        "maxRequestRetries": 5,
+        "maxResults": 9999999,
+        "maxScrollHeightPixels": 5000,
+        "maxSessionRotations": 10,
+        "minFileDownloadSpeedKBps": 128,
+        "proxyConfiguration": {
+          "useApifyProxy": true
+        },
+        "readableTextCharThreshold": 100,
+        "removeCookieWarnings": true,
+        "renderingTypeDetectionPercentage": 10,
+        "requestTimeoutSecs": 60,
+        "saveFiles": false,
+        "saveHtml": false,
+        "saveHtmlAsFile": false,
+        "saveMarkdown": true,
+        "saveScreenshots": false,
+        "startUrls": [],
+        "useSitemaps": false,
+        "includeUrlGlobs": [],
+        "excludeUrlGlobs": [],
+        "initialCookies": [],
+        "waitForSelector": "",
+        "keepElementsCssSelector": "[class=\"_icon-display_1wqi0_3\"],\n._keyword-info-display-container_1hv56_1,\ndiv._svarside-container__text_14289_32:nth-child(2)",
+        "removeElementsCssSelector": "[class=\"_les-mer-list-wrapper_15sy7_3\"]",
+        "clickElementsCssSelector": "[aria-expanded=\"false\"]"
+  
+    }
+}
