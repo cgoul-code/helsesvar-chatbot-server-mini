@@ -9,8 +9,12 @@ from langchain_openai import AzureChatOpenAI
 from llama_index.core import (StorageContext, load_index_from_storage)
 from collections import namedtuple
 import asyncio
+from llama_index.core import Settings
+from llama_index.embeddings.azure_openai import AzureOpenAIEmbedding
+from llama_index.embeddings.openai import OpenAIEmbedding
 
 from dotenv import load_dotenv, find_dotenv
+
 load_dotenv(find_dotenv(), override=False)
 
 # define the namedtuple at module scope
@@ -23,6 +27,29 @@ def RunningLocally():
     else:
         print("Logging info locally")
         return True
+    
+def configure_embeddings():
+    """
+    Configure LlamaIndex to use text-embedding-3-large for all query embeddings.
+    Prefers Azure if AZURE_OPENAI_* is set, else uses api.openai.com.
+    """
+    if os.getenv("AZURE_OPENAI_EMBEDDINGS_ENDPOINT"):
+        # Azure: make sure you created a deployment for text-embedding-3-large
+        # and put its *deployment name* in AZURE_OPENAI_EMBEDDINGS_DEPLOYMENT.
+        Settings.embed_model = AzureOpenAIEmbedding(
+            model=os.getenv('AZURE_OPENAI_EMBEDDINGS_MODEL'),
+            deployment_name=os.getenv("AZURE_OPENAI_EMBEDDINGS_DEPLOYMENT"),
+            api_key=os.getenv("AZURE_OPENAI_EMBEDDINGS_API_KEY"),
+            azure_endpoint=os.getenv("AZURE_OPENAI_EMBEDDINGS_ENDPOINT"),
+            api_version=os.getenv("AZURE_OPENAI_EMBEDDINGS_API_VERSION"),
+        )
+    else:
+        # OpenAI public API (api.openai.com)
+        Settings.embed_model = OpenAIEmbedding(
+            model="text-embedding-3-large",
+            api_key=os.getenv("OPENAI_API_KEY"),
+        )
+    
 
 # Class definitions
 class CustomError(Exception):
@@ -51,7 +78,7 @@ class ServerSettings:
         # Convert object properties to a JSON string
         return json.dumps(self.__dict__, ensure_ascii=False, indent=4, default=str)
 
-
+configure_embeddings()
 
 server_settings = ServerSettings()
 
