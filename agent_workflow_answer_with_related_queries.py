@@ -52,13 +52,13 @@ def llm_call_refine_query(state: State_AnswerWithRelatedQueries) -> dict:
     msg = llm.invoke(
         f"Please refine the user's question in readable way in norwegian, ensuring that the 'I' form is preserved : {query}e"
     )
-    logging.info('---result---: llm_call_refine_query:', msg.content)
+    logging.info(f'---result---: llm_call_refine_query: {msg.content}')
     return {"refinedQuery": msg.content}
 
 def llm_call_answer(state: State_AnswerWithRelatedQueries) -> dict:
     
     response_obj = state["query_engine"].query(state["refinedQuery"])
-    logging.info('---step---: llm_call_answer:', response_obj.response)
+    logging.info(f'---step---: llm_call_answer:{response_obj.response}')
     return {"answer": response_obj.response, "response": response_obj}
 
 def llm_call_related_queries(state: State_AnswerWithRelatedQueries) -> dict:
