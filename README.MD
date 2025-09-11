@@ -192,8 +192,8 @@ to access /Home dir:
 az webapp ssh --name chatbot3-llama-server --resource-group rg-webappaichatbot
 
 To access logging:
-az webapp log config -g rg-webappaichatbot -n chatbot3-llama-server --application-logging true --web-server-logging filesystem
-az webapp log tail  -g rg-webappaichatbot -n chatbot3-llama-server
+az webapp log config -g rg-webappaichatbot -n helsesvar-chatbot-server-mini --web-server-logging filesystem
+az webapp log tail  -g rg-webappaichatbot -n helsesvar-chatbot-server-mini
 
 cd /home/logs
 cat requests.log.2025-05-2
