@@ -168,3 +168,35 @@ Open your browser at `http://localhost:80` to interact with the chat interface.
 ---
 
 Now you’re ready to explore health-related queries with RAG and agent-driven workflows!
+
+
+### Technical developper tips
+## requirements.txt
+pip freeze >> requirements.txt
+pip install -r requirements.txt
+remember to remove pywin32==306 from requirements.txt
+
+## Tips for reinstall llama-index:
+pip install llama-index --upgrade --no-cache-dir --force-reinstall 
+pip check    
+
+:
+git config --edit
+
+start server: hypercorn server:app --bind 0.0.0.0:80
+
+azure CLI:
+(i powershell: az login --tenant helsedir.no)
+
+to access /Home dir:
+az webapp ssh --name chatbot3-llama-server --resource-group rg-webappaichatbot
+
+To access logging:
+az webapp log config -g rg-webappaichatbot -n chatbot3-llama-server --application-logging true --web-server-logging filesystem
+az webapp log tail  -g rg-webappaichatbot -n chatbot3-llama-server
+
+cd /home/logs
+cat requests.log.2025-05-2
+
+Download the containers:
+ az storage blob download-batch --destination C:/Users/ChristianGoulignac/Downloads --source chatbot --account-name helsesvar --account-key COzcrGBg34QJ+KF1yAXG71xuIlbzFIDk2MxjH7If7Dfa22vhU5CftWhqrqFx+u10Pa+B85ryt3NR+AStEIpHLA==
