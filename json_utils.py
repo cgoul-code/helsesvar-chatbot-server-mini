@@ -1,34 +1,28 @@
 import json, re, ast
 from json import JSONDecodeError
 
-def safe_parse_json(maybe_json: str):
-    s = maybe_json.strip()
+_CODE_FENCE_RE = re.compile(r"^```(?:json)?\s*|\s*```$", re.I | re.S)
 
-    # 1) Strip code fences if present
-    s = re.sub(r"^\s*```(?:json)?\s*", "", s, flags=re.IGNORECASE)
-    s = re.sub(r"\s*```\s*$", "", s)
+def safe_parse_json(s: str):
+    if s is None:
+        raise ValueError("No JSON text")
+    s = s.strip()
+    if not s:
+        raise ValueError("Empty JSON text")
 
-    # 2) Try direct JSON
+    # Strip ```json fences if present
+    if s.startswith("```"):
+        s = _CODE_FENCE_RE.sub("", s).strip()
+
+    # Fast path
     try:
         return json.loads(s)
-    except JSONDecodeError:
+    except Exception:
         pass
 
-    # 3) Try to extract the first JSON array/object substring
-    match = re.search(r"(\{.*\}|\[.*\])", s, flags=re.DOTALL)
-    if match:
-        candidate = match.group(1)
-        try:
-            return json.loads(candidate)
-        except JSONDecodeError:
-            # 4) Last resort: tolerate single quotes via ast.literal_eval (Python-ish)
-            try:
-                return ast.literal_eval(candidate)
-            except Exception:
-                pass
+    # Fallback: extract first JSON object/array from mixed text
+    m = re.search(r"(\{.*\}|\[.*\])", s, flags=re.S)
+    if m:
+        return json.loads(m.group(1))
 
-    # 5) Another last resort: ast on full string
-    try:
-        return ast.literal_eval(s)
-    except Exception:
-        raise ValueError("Could not parse LLM output as JSON")
+    raise ValueError("Could not parse LLM output as JSON")
