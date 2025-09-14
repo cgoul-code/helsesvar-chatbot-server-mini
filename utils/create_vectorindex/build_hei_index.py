@@ -10,7 +10,7 @@ LLMGPT4 = AzureChatOpenAI(
     azure_deployment=os.getenv('AZURE_OPENAI_DEPLOYMENT_NAME'),
     api_version=os.getenv('AZURE_OPENAI_API_VERSION'),
     azure_endpoint=os.getenv('AZURE_OPENAI_ENDPOINT'),
-    temperature=0.0,
+    #temperature=0.0,
     timeout=120,
 )
 
