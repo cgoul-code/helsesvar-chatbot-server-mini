@@ -7,8 +7,8 @@ class QuerySettings:
         # Default values provided in the constructor
         self.response_mode = kwargs.get('response_mode', 'tree_summarize')
         self.similarity_top_k = int(kwargs.get('similarity_top_k', 10))  # Default to int, not str
-        self.similarity_cutoff = float(kwargs.get('similarity_cutoff', 0.7))  # Default to float
-        self.relevancy_cutoff = float(kwargs.get('relevancy_cutoff', 0.60))  # Default to float
+        self.similarity_cutoff = float(kwargs.get('similarity_cutoff', 0.45))  # Default to float
+        self.relevancy_cutoff = float(kwargs.get('relevancy_cutoff', 0.45))  # Default to float
         self.vectorIndex = kwargs.get('vectorIndex', "None")
         self.user_content = kwargs.get('user_content', "")
         self.agent = kwargs.get('agent', "structured")
@@ -22,8 +22,8 @@ def get_query_settings(json_request):
     query_settings = QuerySettings(
         response_mode=json_request.get('response_mode', 'tree_summarize'),
         similarity_top_k=json_request.get('similarity_top_k', 10),
-        similarity_cutoff=json_request.get('similarity_cutoff', 0.7),
-        relevancy_cutoff=json_request.get('relevancy_cutoff', 0.60),
+        similarity_cutoff=json_request.get('similarity_cutoff', 0.45),
+        relevancy_cutoff=json_request.get('relevancy_cutoff', 0.45),
         vectorIndex=json_request.get('vectorIndex', "helsenorgeartikler"),
         agent = json_request.get('agent', "structured")
     )

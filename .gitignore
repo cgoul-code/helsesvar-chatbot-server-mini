@@ -2,6 +2,7 @@
 .env
 .azure_settings.json
 .environement.ini
+.venv
 
 # Temporary files and backup artifacts
 *.bak

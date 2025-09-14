@@ -296,10 +296,13 @@ def get_answer_with_related_queries(
         streaming = False,
         structured_answer_filtering=True, 
         verbose=True)
+    
+    from llama_index.core.postprocessor import SimilarityPostprocessor
 
     query_engine_related_queries = index.as_query_engine(
-        similarity_cutoff=query_settings.similarity_cutoff,
+        #similarity_cutoff=query_settings.similarity_cutoff,
         similarity_top_k=query_settings.similarity_top_k,
+        node_postprocessors=[SimilarityPostprocessor(similarity_cutoff=query_settings.similarity_cutoff)],
         response_synthesizer=response_related_queries_synthesizer,
     )
     

@@ -11,7 +11,7 @@ from collections import namedtuple
 import asyncio
 from llama_index.core import Settings
 from llama_index.embeddings.azure_openai import AzureOpenAIEmbedding
-from llama_index.embeddings.openai import OpenAIEmbedding
+
 
 from dotenv import load_dotenv, find_dotenv
 
@@ -33,22 +33,17 @@ def configure_embeddings():
     Configure LlamaIndex to use text-embedding-3-large for all query embeddings.
     Prefers Azure if AZURE_OPENAI_* is set, else uses api.openai.com.
     """
-    if os.getenv("AZURE_OPENAI_EMBEDDINGS_ENDPOINT"):
-        # Azure: make sure you created a deployment for text-embedding-3-large
-        # and put its *deployment name* in AZURE_OPENAI_EMBEDDINGS_DEPLOYMENT.
-        Settings.embed_model = AzureOpenAIEmbedding(
-            model=os.getenv('AZURE_OPENAI_EMBEDDINGS_MODEL'),
-            deployment_name=os.getenv("AZURE_OPENAI_EMBEDDINGS_DEPLOYMENT"),
-            api_key=os.getenv("AZURE_OPENAI_EMBEDDINGS_API_KEY"),
-            azure_endpoint=os.getenv("AZURE_OPENAI_EMBEDDINGS_ENDPOINT"),
-            api_version=os.getenv("AZURE_OPENAI_EMBEDDINGS_API_VERSION"),
-        )
-    else:
-        # OpenAI public API (api.openai.com)
-        Settings.embed_model = OpenAIEmbedding(
-            model="text-embedding-3-large",
-            api_key=os.getenv("OPENAI_API_KEY"),
-        )
+
+    # Azure: make sure you created a deployment for text-embedding-3-large
+    # and put its *deployment name* in AZURE_OPENAI_EMBEDDINGS_DEPLOYMENT.
+    Settings.embed_model = AzureOpenAIEmbedding(
+        model=os.getenv('AZURE_OPENAI_EMBEDDINGS_MODEL'),
+        deployment_name=os.getenv("AZURE_OPENAI_EMBEDDINGS_DEPLOYMENT"),
+        api_key=os.getenv("AZURE_OPENAI_EMBEDDINGS_API_KEY"),
+        azure_endpoint=os.getenv("AZURE_OPENAI_EMBEDDINGS_ENDPOINT"),
+        api_version=os.getenv("AZURE_OPENAI_EMBEDDINGS_API_VERSION"),
+    )
+
     
 
 # Class definitions
@@ -125,7 +120,7 @@ VECTOR_INDEX_MAP = [
     # {"name": "ungnospmtobakk", "storage": ("." if RunningLocally() else "") +"/blobstorage/chatbot/ungnospmtobakk", "description":"Jeg svarer på spørsmål om tobakk, snus, vaping"}, 
     # {"name": "ungnospm", "storage": ("." if RunningLocally() else "") +"/blobstorage/chatbot/ungnospm", "description":"Jeg svarer på spørsmål ulike temaer som ungdommer lurer på"},     
     # {"name": "helsenorgeartikler", "storage": ("." if RunningLocally() else "") +"/blobstorage/chatbot/helsenorgeartikler", "description":"Jeg svarer på spørsmål om flere artikler på helsenorge om helsespørsmål som graviditet, rus, tobakk, graviditet og sykdommer"},
-    {"name": "hvaerinnafor", "storage": ("." if RunningLocally() else "") +"/blobstorage/chatbot/hvaerinnafor", "description":"Jeg svarer på spørsmål om problematisk eller skadelig seksuell adferd med korte tekster"},
+    {"name": "hvaerinnafor", "storage": ("." if RunningLocally() else "") +"/blobstorage/chatbot/hvaerinnafor", "description":"Forelskelse"},
 ]
 
 
