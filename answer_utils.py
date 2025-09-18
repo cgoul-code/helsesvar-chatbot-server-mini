@@ -2,6 +2,8 @@ from agent_workflow_structured_answer import (optimizer_workflow, State_Structur
 from agent_workflow_answer_with_related_queries import (answer_with_related_queries_workflow, State_AnswerWithRelatedQueries)
 from config import ServerSettings, VectorIndexStore, CustomError
 from query_utils import QuerySettings
+from llama_index.core.vector_stores import MetadataFilter, MetadataFilters
+from llama_index.core.query_engine import RetrieverQueryEngine 
 from llama_index.core.llms import ChatMessage, MessageRole
 from llama_index.core import ChatPromptTemplate, get_response_synthesizer, VectorStoreIndex
 import logging
@@ -133,6 +135,21 @@ def get_answer_with_related_queries(
     index: VectorStoreIndex = entry.index
     vector_index_description = entry.description
     logging.info("Found entry: %s", vector_index_description)
+    
+    # 1.1 Load the qa_bank corresponding to the index
+    vec_name_qa_bank = f'{query_settings.vectorIndex}_qa_bank'
+    entry_qa_bank = vector_store.get(vec_name_qa_bank)
+    if entry_qa_bank is None:
+        # Log with %s formatting
+        logging.error("Index not found: %s", vec_name_qa_bank)
+        # Raise so the route handler can catch & return 404 JSON
+        raise CustomError(
+            f"Index not found, referansefilene for {vec_name_qa_bank} mangler!",
+            404
+        )
+
+    index_qa_bank: VectorStoreIndex = entry_qa_bank.index
+    vector_index_description_qa_bank = entry_qa_bank.description
 
     # 2) Build your prompt template
     text_qa_template = ChatPromptTemplate([
@@ -187,93 +204,31 @@ def get_answer_with_related_queries(
         response_synthesizer=response_synthesizer,
     )
     
-    # 5) Build the queryengine for related queries
-    keywords = {
-        "aldersforskjeller",
-        "aldersgrense",
-        "alkohol og rus",
-        "avhengighet av porno",
-        "bildedeling",
-        "digital blotting",
-        "digital sikkerhet",
-        "diagnose",
-        "digitale overgrep",
-        "erogene soner",
-        "fantasi versus handling",
-        "fetisj",
-        "første gang sex",
-        "gaming",
-        "grenser",
-        "grensetråkk",
-        "hentai",
-        "hva er normalt",
-        "hva er pedofili",
-        "hvordan gi samtykke",
-        "håndtering av grenser",
-        "intime grenser",
-        "kommunikasjon i forhold",
-        "konflikthåndtering",
-        "kroppsspråk",
-        "kulturelle forventninger",
-        "kulturelle perspektiver",
-        "lov om deling av nakenbilder",
-        "lovlige og ulovlige seksuelle handlinger",
-        "maktskjevhet i forhold",
-        "nakenbilder",
-        "nettvett",
-        "onanering",
-        "overdrevet onanering",
-        "personvern",
-        "pornografi",
-        "porno og påvirkning",
-        "press i relasjoner",
-        "pubertet",
-        "quiz om seksualitet",
-        "religiøse perspektiver",
-        "respekt for grenser",
-        "rettigheter",
-        "rettslige konsekvenser",
-        "samtykke",
-        "seksualitet",
-        "seksualitet i sosiale medier",
-        "seksualitet og religion",
-        "seksuelle fantasier",
-        "seksuelle handlinger",
-        "seksuelle rettigheter",
-        "seksuell helse",
-        "seksuell nysgjerrighet",
-        "seksuell trakassering",
-        "seksuelt press",
-        "selvregulering av seksuell adferd",
-        "skam",
-        "skyldfølelse",
-        "slettmeg.no",
-        "sosiale normer og sex",
-        "stereotyper",
-        "straff for seksuelle overgrep",
-        "straff for voldtekt",
-        "sunn onanipraksis",
-        "tabubelagte tanker",
-        "tabuer rundt seksualitet",
-        "ulovlig deling",
-        "ungdom og seksualitet"
-    }
      # 6) define a related question template
     text_rq_template = ChatPromptTemplate([
         ChatMessage(
             role=MessageRole.SYSTEM,
             content=(
-                "You will be provided with a user query.\n"
-                "Follow these steps to answer:\n"
-                f"Step-1: Classify the query into a maximum of 3 different categories using the following list of keywords: {keywords}.\n"
-                "Step-2: For each category from Step 1, use the given context to display 2 relevant questions in Norwegian.\n"
-                "Output requirements:\n"
-                "- Return JSON ONLY. No explanations. No markdown. No code fences.\n"
-                "- Use double quotes for all keys and strings.\n"
-                "- Do not include trailing commas.\n"
-                "- The relevant questions from Step-2 has to keep information of the context for from the initial user query, an example: if the user query concerns the sharing of nude images, and a relevant question from step-2 is about penalties, the relevant question should address penalties for sharing nude images.\n"
-                "- Shape:\n"
-                '[{"Category name": "category","Related questions":["question1","question2"]}, ...]\n'
+                # "You will be provided with a user query.\n"
+                # "From the user query, find 5 queries that kan be related to the user query"
+                # "Output requirements:\n"
+                # "- Return JSON ONLY. No explanations. No markdown. No code fences.\n"
+                # "- Use double quotes for all keys and strings.\n"
+                # "- Do not include trailing commas.\n"
+                # "- Keep information of the context for from the initial user query, an example: if the user query concerns the sharing of nude images, and a relevant query is about penalties, the relevant question should address penalties for sharing nude images.\n"
+                # "- Shape:\n"
+                # '[{"Category name": "category","Related questions":["question1","question2"]}, ...]\n'
+                
+                "You will receive a user query and a list of CANDIDATE QUERIES, each with a unique 'id' and a 'text'.\n"
+                "Your task is to select the most relevant candidate queries to the user query. IMPORTANT RULES:\n"
+                "1) DO NOT REWRITE OR EDIT ANY CANDIDATE TEXT.\n"
+                "2) Output ONLY the IDs of the selected candidates in JSON.\n"
+                "3) Prefer candidates that best capture the user's information need; avoid near-duplicates.\n"
+                "4) If nothing is clearly relevant, return an empty list.\n\n"
+                "USER QUERY:\n{user_query}\n\n"
+                "CANDIDATE QUERIES (JSON Lines, one per line):\n{candidates_jsonl}\n\n"
+                "Output JSON ONLY (no markdown):\n"
+                '{{"selected_ids": ["id1","id2","id3"]}}'
             )
         ),
         ChatMessage(
@@ -289,6 +244,17 @@ def get_answer_with_related_queries(
             ),
         ),
     ])
+    severity_filters = MetadataFilters(
+        filters=[MetadataFilter(key="severity", value=v) for v in ("Green", "Yellow", "Red")], condition="or",
+    )
+    
+    retriever_related_queries = index_qa_bank.as_retriever(
+        similarity_top_k=query_settings.similarity_top_k,
+        similarity_cutoff=query_settings.similarity_cutoff,
+        filters=severity_filters,
+    )
+        
+
         
     response_related_queries_synthesizer = get_response_synthesizer(
         response_mode= "tree_summarize",
@@ -300,12 +266,16 @@ def get_answer_with_related_queries(
     from llama_index.core.postprocessor import SimilarityPostprocessor
 
     query_engine_related_queries = index.as_query_engine(
-        #similarity_cutoff=query_settings.similarity_cutoff,
         similarity_top_k=query_settings.similarity_top_k,
         node_postprocessors=[SimilarityPostprocessor(similarity_cutoff=query_settings.similarity_cutoff)],
         response_synthesizer=response_related_queries_synthesizer,
     )
-    
+    # query_engine_related_queries = RetrieverQueryEngine.from_args(
+    #     node_postprocessors=[SimilarityPostprocessor(similarity_cutoff=query_settings.similarity_cutoff)],
+    #     retriever=retriever_related_queries,
+    #     response_synthesizer=response_related_queries_synthesizer,
+    # )
+        
     
     
 
@@ -314,6 +284,7 @@ def get_answer_with_related_queries(
         "llm": server_settings.llm,
         "query_engine": query_engine,
         "query_engine_related_queries": query_engine_related_queries,
+        "retriever_related_queries": retriever_related_queries,
         "vector_index_description": vector_index_description,
         "query": query_settings.user_content,
         "similarity_cutoff": query_settings.similarity_cutoff,

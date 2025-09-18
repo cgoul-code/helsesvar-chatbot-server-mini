@@ -4,8 +4,6 @@ import logging
 import json
 from typing import List, Literal
 from typing_extensions import TypedDict
-import registry
-from registry import severity_prompt, qa_subject_no_prompt
 
 from llama_index.core.base.response.schema import Response
 from llama_index.core.query_engine import BaseQueryEngine
@@ -383,14 +381,54 @@ def apify_call_load_documents(state: State_buildIndex) -> dict:
     return {"documents": documents, "documents_text": documents_text}
 
 def create_metadata_for_documents(state: State_buildIndex) -> dict:
+    
+        # •	tema: ["Forhold", "Forelskelse", "samtykke", "porno", ...]
+        # •	undertema: ["grenser", "tillit", "brudd", "sjalusi", ...] (eksempel på undertemaer for "Forhold")
+        # •	målgruppe: ["ungdom", "foreldre", "fagpersoner"]
+        # •	aldersgruppe: ["13-15", "16-18", "18+"]
+        # •	hensikt: ["informasjon", "hjelpesøkende", "egenvurdering", "krise"]
+        # •	tone: ["nøytral", "empatisk", "autoritativ"]
 
+    
     documents = state["documents"]
     keyword_sets = state.get("keyword_sets", [])
     print('keyword_sets available to classifier:', keyword_sets)
     updated_docs = []
         
     for doc in documents:
-        sev_prompt = severity_prompt(doc.text)
+        sev_prompt = (
+            f'You are given a text: {doc.text}\n\n'
+            'Categorize the severity of this text into one of three categories: Green, Yellow, or Red.\n\n'
+
+            'Green category:\n'
+            '- Preventive and safety-promoting.\n'
+            '- Texts that provide general information, knowledge, and guidance to prevent problems and strengthen good sexual health.\n'
+            '- The content helps increase understanding, safety, and awareness (e.g., consent, contraception, communication, emotions, body knowledge).\n'
+            '- No acute situation or personal crisis is described.\n'
+            'Example: "How to talk with your partner about boundaries" or "Facts about condoms".\n\n'
+
+            'Yellow category:\n'
+            '- Challenges or vulnerable situations.\n'
+            '- Texts that describe concerns, difficulties, or risks that may require reflection or support, but are not acute or immediately dangerous.\n'
+            '- May involve difficult feelings, uncertainty in relationships, unwanted experiences, or the need for advice beyond general information.\n'
+            '- The reader may need to seek help or guidance, but the situation is not considered an acute crisis.\n'
+            'Example: "What should I do if my partner doesn’t respect my boundaries?", '
+            '"I regret sending a nude", or topics like "pornography", "sexual pressure", "issues around consent", "(illegal) fetishes".\n\n'
+
+            'Red category:\n'
+            '- Serious or acute situations.\n'
+            '- Texts that concern serious incidents or crises where the person involved may be in danger or at significant risk of harm.\n'
+            '- Includes violence, abuse, coercion, acute psychological crises, or other situations that require immediate follow-up or professional help.\n'
+            '- The main purpose of the text is to provide information about where and how to get help quickly.\n'
+            'Example: "Sex with animals", "Sex with family members", "Downloading child pornography", "Illegal image sharing".\n\n'
+
+            'Output requirements:\n'
+            '- Return JSON ONLY. No explanations. No markdown. No code fences.\n'
+            '- Use double quotes for all keys and strings.\n'
+            '- Do not include trailing commas.\n'
+            '- Output shape:\n'
+            '{ "category": "<Green|Yellow|Red>" }'
+        )
         sev_resp = state["llm"].invoke(sev_prompt)
         try:
             sev_json = json.loads(sev_resp.content)
@@ -399,8 +437,54 @@ def create_metadata_for_documents(state: State_buildIndex) -> dict:
             print(f"Severity JSON parse error: {e} | raw={sev_resp.content!r}")
             doc.metadata["severity"] = ""
         
+        
+        # kw_prompt = (
+        #     f'You are given a text: {doc.text}\n\n'
+        #     f'From the given text, identify relevant "Mainkeywords" and "Keywords" ONLY from this set: {keyword_sets}\n\n'
+        #     'Output requirements:\n'
+        #     '- Return JSON ONLY. No explanations. No markdown. No code fences.\n'
+        #     '- Use double quotes for all keys and strings.\n'
+        #     '- Do not include trailing commas.\n'
+        #     '- Use only mainkeywords and keywords from the provided keyword sets.\n'
+        #     '- Shape:\n'
+        #     '[{"Mainkeywords": "main", "Keywords": ["k1", "k2"]}, ...]\n'
+        # )
+        # kw_resp = state["llm"].invoke(kw_prompt)
+        # print('kw raw:', kw_resp.content)
+        # try:
+        #     kw_json = json.loads(kw_resp.content)
+        #     if not isinstance(kw_json, list):
+        #         raise ValueError("keywords JSON must be a list")
+        #     doc.metadata["keyword_sets"] = kw_json
+        # except Exception as e:
+        #     print(f"Keyword JSON parse error: {e} | raw={kw_resp.content!r}")
+        #     doc.metadata["keyword_sets"] = []
             
-        qa_prompt = qa_subject_no_prompt(text=doc.text)
+        qa_prompt = (f'Here is the context: {doc.text}\n'
+            'Given the contextual information, \n'
+            'generate a list of questions in Norwegian that this context can provide specific answers to, which are unlikely to be found elsewhere.\n'
+            '\n'
+            'STRICT REQUIREMENT:\n'
+            '- Every single question MUST explicitly mention the subject of the context (for example "Forelskelse") instead of referring to "teksten", "artikkelen", "avsnittet" or similar.\n'
+            '- Do not use phrases like "ifølge teksten", "hva sier teksten", "nevnes i teksten" etc.\n'
+            '- Instead, directly phrase the questions around the subject matter itself.\n\n'
+            'Example of WRONG question: "Hva sier teksten om hvordan man merker at man er forelsket?"\n'
+            'Example of RIGHT question: "Hva er vanlige tegn på forelskelse som skiller det fra å bare være betatt?"\n\n'
+            'Output requirements:\n'
+            '- Only generate questions about the subject matter and content of the text\n'
+            '- Return JSON ONLY. No explanations. No markdown. No code fences.\n'
+            '- Use double quotes for all keys and strings.\n'
+            '- Do not include trailing commas.\n'
+            'Do NOT generate questions about:\n'
+            '- who wrote the article\n'
+            '- contributors or authors\n'
+            '- which website, publication, or source the text comes from\n'
+            '- metadata such as publishing date, copyright, or layout\n\n'
+            '- Shape:\n'
+            '{"Questions": ["question1", "question2"]}'
+            )
+
+        
         qa_resp = state["llm"].invoke(qa_prompt)
         qa_raw = qa_resp.content
         #print('qa raw:', qa_resp.content)
@@ -437,6 +521,34 @@ def create_questions_answered(state: State_buildIndex) -> dict:
             questions_answered.append(new_doc)
 
     return {"questions_answered": questions_answered}
+
+def create_mainkeywords_and_keywords(state: State_buildIndex) -> dict:
+    msg = state["llm"].invoke(
+        f'Based on the text I provide you, generate a list of relevant mainkeywords and keywords: {state["documents_text"]}\n\n'
+        ' Output requirements:\n'
+        '- Answer in norwegian\n'
+        '- Return JSON ONLY. No explanations. No markdown. No code fences.\n'
+        '- Use double quotes for all keys and strings.\n'
+        '- Do not include trailing commas.\n'
+        '- Avoid duplicate key\n'
+        '- Example for a mainkeywords: "Følelser og tanker", "Forhold og Identitet"\n'
+        '- Example for a keywords: "Forelskelse", "Forhold"\n'
+        '- Shape:\n'
+        '[{"Mainkeywords": "mainkeywords", "Keywords": ["keyword1", "keyword2"]}, ...]\n'
+    )
+    print(f'keywords raw: {msg.content}')
+
+    try:
+        keyword_sets = json.loads(msg.content)
+        if not isinstance(keyword_sets, list):
+            raise ValueError("keyword_sets must be a list")
+    except Exception as e:
+        # fail-soft: keep pipeline alive with empty list
+        print(f'Failed to parse keyword_sets JSON: {e}')
+        keyword_sets = []
+
+    # IMPORTANT: return updates, don’t mutate state in-place
+    return {"keyword_sets": keyword_sets}
 
 def create_log_file(state: State_buildIndex) -> dict:
     # Create a log for each item
@@ -612,14 +724,19 @@ builder = StateGraph(State_buildIndex)
 # 1️⃣ Core answer + validation
 builder.add_node("apify_call_load_documents", apify_call_load_documents)
 builder.add_node("persist_storage", persist_storage)
+builder.add_node("create_mainkeywords_and_keywords", create_mainkeywords_and_keywords)
 builder.add_node("create_metadata_for_documents", create_metadata_for_documents)
-builder.add_node("create_questions_answered", create_questions_answered)
+builder.add_node("create_questionsAnswered_bank", create_questionsAnswered_bank)
+
 builder.add_node("create_log_excel", create_log_excel)
 
 builder.add_edge(START, "apify_call_load_documents")
 builder.add_edge("apify_call_load_documents", "create_metadata_for_documents")
+builder.add_edge("create_mainkeywords_and_keywords", "create_metadata_for_documents")
+
 builder.add_edge("create_metadata_for_documents", "create_questions_answered")
 builder.add_edge("create_questions_answered", "create_log_excel")
+#builder.add_edge("apify_call_load_documents", "create_key_words")
 builder.add_edge("create_log_excel", "persist_storage")
 
 # 5️⃣ Finally, aggregator → END

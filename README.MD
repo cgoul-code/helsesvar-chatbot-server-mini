@@ -176,6 +176,10 @@ pip freeze >> requirements.txt
 pip install -r requirements.txt
 remember to remove pywin32==306 from requirements.txt
 
+## to run build script for vectorindex (as a module):
+python -m utils.create_vectorindex.build_hei_index
+
+
 ## reinstall 
 # 0) Close any Python terminals/VSCode tasks using the venv
 
@@ -222,3 +226,5 @@ cat requests.log.2025-05-2
 
 Download the containers:
  az storage blob download-batch --destination C:/Users/ChristianGoulignac/Downloads --source chatbot --account-name helsesvar --account-key COzcrGBg34QJ+KF1yAXG71xuIlbzFIDk2MxjH7If7Dfa22vhU5CftWhqrqFx+u10Pa+B85ryt3NR+AStEIpHLA==
+
+
