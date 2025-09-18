@@ -286,9 +286,9 @@ def aggregator(state: State_AnswerWithRelatedQueries) -> dict:
             if q:
                 combined += f"=={q}==\n"
            
-        combined += f"## Sporingsinfo (testformål)\n"     
-        combined += f"Spørsmål farge: {state['query_severity']}\n"
-        combined += f"Svar relevans: {state['relevancy_band']}\n"
+        combined += f"## Sporing (test)\n"     
+        combined += f"Farge på spørsmålet: {state['query_severity']}\n"
+        combined += f"Svarrelevans: {state['relevancy_band']}\n"
                 
         return {"structured_answer": combined}
 
