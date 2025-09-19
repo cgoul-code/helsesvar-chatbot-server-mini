@@ -16,8 +16,8 @@ class Prompt:
 
 
 # === TEMPLATES ===
-SEVERITY = Prompt(
-    id="severity",
+SEVERITY_FOR_TEXT = Prompt(
+    id="severity_for_text",
     template=(
         "You are given a text: {text}\n\n"
         "Categorize the severity of this text into one of three categories: Green, Yellow, or Red.\n\n"
@@ -48,6 +48,38 @@ SEVERITY = Prompt(
         '{{ "category": "<Green|Yellow|Red>" }}'
     ),
 )
+SEVERITY_FOR_QUERY = Prompt(
+    id="severity_for_query",
+    template=(
+        "You are given a user query: {query}\n\n"
+        "Categorize the severity of this query into one of three categories: Green, Yellow, or Red.\n\n"
+        "Green category:\n"
+        "- Preventive and safety-promoting.\n"
+        "- Queries that ask for general information, knowledge, or guidance to prevent problems and strengthen good sexual health.\n"
+        "- The user is seeking to increase understanding, safety, and awareness (e.g., consent, contraception, communication, emotions, body knowledge).\n"
+        "- No acute situation or personal crisis is described.\n"
+        'Example: "How can I talk with my partner about boundaries?" or "What types of contraception exist?".\n\n'
+        "Yellow category:\n"
+        "- Challenges or vulnerable situations.\n"
+        "- Queries that describe concerns, difficulties, or risks that may require reflection or support, but are not acute or immediately dangerous.\n"
+        "- May involve difficult feelings, uncertainty in relationships, unwanted experiences, or the need for advice beyond general information.\n"
+        "- The user may need to seek help or guidance, but the situation is not considered an acute crisis.\n"
+        'Example: "What should I do if my partner doesn’t respect my boundaries?", '
+        '"I regret sending a nude", or topics like "pornography", "sexual pressure", "issues around consent", "(illegal) fetishes".\n\n'
+        "Red category:\n"
+        "- Serious or acute situations.\n"
+        "- Queries that concern serious incidents or crises where the person involved may be in danger or at significant risk of harm.\n"
+        "- Includes violence, abuse, coercion, acute psychological crises, or other situations that require immediate follow-up or professional help.\n"
+        "- The main purpose of the response should be to direct the user to where and how to get help quickly.\n"
+        'Example: "My stepfather forces me to have sex", "Where can I find child pornography?", "I was raped yesterday".\n\n'
+        "Output requirements:\n"
+        "- Return JSON ONLY. No explanations. No markdown. No code fences.\n"
+        '- Use double quotes for all keys and strings.\n'
+        "- Do not include trailing commas.\n"
+        '- Output shape:\n'
+        '{{ \"category\": \"<Green|Yellow|Red>\" }}'
+    ),
+)
 
 # Subject-focused Norwegian Q&A question generator
 QA_SUBJECT_NO = Prompt(
@@ -55,11 +87,11 @@ QA_SUBJECT_NO = Prompt(
     template=(        
         'Here is the context: {text}\n'
         'Given the contextual information, \n'
-        'generate a list of questions in Norwegian that this context can provide specific answers to, which are unlikely to be found elsewhere.\n'
+        'generate a short list of short questions in Norwegian that this context can provide specific answers to, which are unlikely to be found elsewhere.\n'
         '\n'
         'STRICT REQUIREMENT:\n'
         '- Every single question MUST explicitly mention the subject of the context (for example \"Forelskelse\") instead of referring to "teksten", "artikkelen", "avsnittet" or similar.\n'
-        '- Do not use phrases like "ifølge teksten", "hva sier teksten", "nevnes i teksten" etc.\n'
+        '- Do not use phrases like "ifølge teksten", " ifølge konteksten", "hva sier teksten", "nevnes i teksten" etc.\n'
         '- Instead, directly phrase the questions around the subject matter itself.\n\n'
         'Example of WRONG question: "Hva sier teksten om hvordan man merker at man er forelsket?"\n'
         'Example of RIGHT question: "Hva er vanlige tegn på forelskelse som skiller det fra å bare være betatt?"\n\n'
@@ -73,6 +105,11 @@ QA_SUBJECT_NO = Prompt(
         '- contributors or authors\n'
         '- which website, publication, or source the text comes from\n'
         '- metadata such as publishing date, copyright, or layout\n\n'
+        "Tone and Style Guidelines:\n"
+        "- Teen-Friendly Language (Ages 13-19):\n"
+        "- Avoid overly medical jargon or complex terminology. If you must use a technical term, explain it immediately in simple words.\n"
+        "- Use short questions.\n"
+        "- Maintain a friendly, approachable, and encouraging tone. Imagine you're talking to a smart but not yet expert high school student.\n"
         '- Shape:\n'
         '{{"Questions": ["question1", "question2"]}}'
     ),
@@ -95,18 +132,22 @@ QUERY_RERANK_IDS = Prompt(
         "Output JSON ONLY:\n"
         '{{"selected_ids":["id1","id2"]}}'
     )
-)
+)hvordan hordan 
 
 # (Optional) A small registry if you prefer string-based lookups
 REGISTRY: Dict[str, Prompt] = {
-    SEVERITY.id: SEVERITY,
+    SEVERITY_FOR_TEXT.id: SEVERITY_FOR_TEXT,
+    SEVERITY_FOR_QUERY.id: SEVERITY_FOR_QUERY,
     QA_SUBJECT_NO.id: QA_SUBJECT_NO,
 }
 
 
 # === Helper “renderers” you can import directly ===
-def severity_prompt(text: str) -> str:
-    return SEVERITY.render(text=text)
+def severity_for_text_prompt(text: str) -> str:
+    return SEVERITY_FOR_TEXT.render(text=text)
+
+def severity_for_query_prompt(query: str) -> str:
+    return SEVERITY_FOR_QUERY.render(query=query)
 
 def qa_subject_no_prompt(text: str) -> str:
     return QA_SUBJECT_NO.render(text=text)
