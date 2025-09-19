@@ -132,7 +132,7 @@ QUERY_RERANK_IDS = Prompt(
         "Output JSON ONLY:\n"
         '{{"selected_ids":["id1","id2"]}}'
     )
-)hvordan hordan 
+)
 
 # (Optional) A small registry if you prefer string-based lookups
 REGISTRY: Dict[str, Prompt] = {
