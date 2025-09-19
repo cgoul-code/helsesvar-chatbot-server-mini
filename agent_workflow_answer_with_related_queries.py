@@ -5,7 +5,7 @@ import json
 from typing import List, Literal
 from typing_extensions import TypedDict
 from json_utils import safe_parse_json
-from registry import (severity_prompt, qa_subject_no_prompt, qa_query_rerank_ids_prompt)
+from registry import (severity_for_text_prompt, qa_subject_no_prompt, qa_query_rerank_ids_prompt)
 
 from llama_index.core.base.response.schema import Response
 from llama_index.core.query_engine import BaseQueryEngine
@@ -76,7 +76,7 @@ def llm_call_severity(state: State_AnswerWithRelatedQueries) -> dict:
 
     llm = state["llm"]
     refined_query = state["refined_query"]
-    sev_prompt = severity_prompt(refined_query)
+    sev_prompt = severity_for_text_prompt(refined_query)
     msg = llm.invoke(sev_prompt)
     logging.info(f'---result---: llm_call_severity: {msg.content}')
     
@@ -281,7 +281,7 @@ def aggregator(state: State_AnswerWithRelatedQueries) -> dict:
                 combined += f"- [{r['name']}]({r['url']}) \n"
 
         combined += "## Lignende spørsmål\n"
-        for r in state["related_queries"]:
+        for r in (state.get("related_queries") or [])[:5]:
             q = r.get("query") or r.get("text") or r.get("q")
             if q:
                 combined += f"=={q}==\n"

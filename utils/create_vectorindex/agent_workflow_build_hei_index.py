@@ -2,10 +2,12 @@ import os
 import re
 import logging
 import json
-from typing import List, Literal
+import numpy as np
+from typing import List, Literal, Optional
 from typing_extensions import TypedDict
+from sklearn.metrics.pairwise import cosine_similarity
 import registry
-from registry import severity_prompt, qa_subject_no_prompt
+from registry import severity_for_text_prompt, severity_for_query_prompt, qa_subject_no_prompt
 
 from llama_index.core.base.response.schema import Response
 from llama_index.core.query_engine import BaseQueryEngine
@@ -36,12 +38,49 @@ class State_buildIndex(TypedDict):
     name: str
     storage: str
     documents: List[Document]
-    questions_answered: List[Document]
+    answered_questions: List[Document]
     documents_text : str
     blobstorage : bool
     keyword_sets: List[KeywordSet]
     
 # === Helpers ===
+
+def _embed_texts(texts: List[str], model: Optional[AzureOpenAIEmbedding] = None, batch_size: int = 64) -> np.ndarray:
+    model = model 
+    embs = []
+    for i in range(0, len(texts), batch_size):
+        embs.extend(model.get_text_embedding_batch(texts[i:i+batch_size]))
+    return np.asarray(embs, dtype=np.float32)
+
+def _deduplicate_semantic_docs_greedy(
+    docs: List[Document],
+    embeddings: Optional[np.ndarray] = None,
+    threshold: float = 0.85,
+    embed_model: Optional[AzureOpenAIEmbedding] = None,
+) -> List[Document]:
+    """
+    Greedy semantic deduplication over a list of Document objects (uses doc.text).
+    Keeps the first representative if max similarity < threshold.
+    Returns a filtered list of Documents.
+    """
+    if not docs:
+        return []
+
+    texts = [(d.text if isinstance(d.text, str) else "" if d.text is None else str(d.text)) for d in docs]
+
+    if embeddings is None:
+        embeddings = _embed_texts(texts, model=embed_model)
+
+    keep_idx: List[int] = []
+    for i in range(len(texts)):
+        if not keep_idx:
+            keep_idx.append(i)
+            continue
+        sims = cosine_similarity(embeddings[i:i+1], embeddings[keep_idx])[0]
+        if float(np.max(sims)) < threshold:
+            keep_idx.append(i)
+
+    return [docs[i] for i in keep_idx]
 
 def _persist_storage_for_item(name: str, storage:str, blob_storage: str, documents: List[Document]):
     
@@ -55,13 +94,13 @@ def _persist_storage_for_item(name: str, storage:str, blob_storage: str, documen
         #     chunk_size=1200,
         #     chunk_overlap=150,
         #     )
-        Settings.embed_model = AzureOpenAIEmbedding(
-            model=os.getenv('AZURE_OPENAI_EMBEDDINGS_MODEL'),
-            deployment_name=os.getenv("AZURE_OPENAI_EMBEDDINGS_DEPLOYMENT"),
-            api_key=os.getenv("AZURE_OPENAI_EMBEDDINGS_API_KEY"),
-            azure_endpoint=os.getenv("AZURE_OPENAI_EMBEDDINGS_ENDPOINT"),
-            api_version=os.getenv("AZURE_OPENAI_EMBEDDINGS_API_VERSION"),
-        )
+    # Settings.embed_model = AzureOpenAIEmbedding(
+    #     model=os.getenv('AZURE_OPENAI_EMBEDDINGS_MODEL'),
+    #     deployment_name=os.getenv("AZURE_OPENAI_EMBEDDINGS_DEPLOYMENT"),
+    #     api_key=os.getenv("AZURE_OPENAI_EMBEDDINGS_API_KEY"),
+    #     azure_endpoint=os.getenv("AZURE_OPENAI_EMBEDDINGS_ENDPOINT"),
+    #     api_version=os.getenv("AZURE_OPENAI_EMBEDDINGS_API_VERSION"),
+    # )
 
         # nodes = Settings.text_splitter.get_nodes_from_documents(documents)
 
@@ -147,7 +186,7 @@ def _iter_meta_rows(meta: dict, base_path: str = ""):
     """
     Yield rows for a 'long' metadata table.
     - For dicts: recurse with dotted keys.
-    - For lists: one row per element with meta_index and meta_path like 'answeredQuestions[0]'.
+    - For lists: one row per element with meta_index and meta_path like 'answered_questions[0]'.
     - For scalars: single row.
     """
     if meta is None:
@@ -284,7 +323,7 @@ def _transform_dataset_item(doc_item, content_type):
     keywords =doc_item.get('metadata', {}).get('keywords', 'Untitled')
     description =doc_item.get('metadata', {}).get('description', 'Untitled')
 
-    print(f'Title: {title}, Keywords: {keywords}, Description: {description}' )
+    #print(f'Title: {title}, Keywords: {keywords}, Description: {description}' )
     markdown_content = doc_item.get("markdown", "")
     if(content_type=="markdown_content"):
         text_content = doc_item.get("markdown", "")
@@ -319,7 +358,7 @@ def _transform_dataset_item(doc_item, content_type):
         "keywords": keywords,
         "description": description,
         "severity":"",
-        "questionsAnswered":""
+        "answered_questions":""
         }
     )
     #print(f'\nMetadata: {metadata}')
@@ -337,8 +376,6 @@ def apify_call_load_documents(state: State_buildIndex) -> dict:
     """
     item = state["name"]
     content_type = state["content_type"]
-
-    print(f'documents_from_startUrls, item: {item}')
 
     run_input = None
     if item in ['hvaerinnafor']:
@@ -386,18 +423,18 @@ def create_metadata_for_documents(state: State_buildIndex) -> dict:
 
     documents = state["documents"]
     keyword_sets = state.get("keyword_sets", [])
-    print('keyword_sets available to classifier:', keyword_sets)
+    #print('keyword_sets available to classifier:', keyword_sets)
     updated_docs = []
         
     for doc in documents:
-        sev_prompt = severity_prompt(doc.text)
-        sev_resp = state["llm"].invoke(sev_prompt)
-        try:
-            sev_json = json.loads(sev_resp.content)
-            doc.metadata["severity"] = sev_json.get("category", "")
-        except Exception as e:
-            print(f"Severity JSON parse error: {e} | raw={sev_resp.content!r}")
-            doc.metadata["severity"] = ""
+        # sev_prompt = severity_for_text_prompt(doc.text)
+        # sev_resp = state["llm"].invoke(sev_prompt)
+        # try:
+        #     sev_json = json.loads(sev_resp.content)
+        #     doc.metadata["severity"] = sev_json.get("category", "")
+        # except Exception as e:
+        #     print(f"Severity JSON parse error: {e} | raw={sev_resp.content!r}")
+        #     doc.metadata["severity"] = ""
         
             
         qa_prompt = qa_subject_no_prompt(text=doc.text)
@@ -414,29 +451,48 @@ def create_metadata_for_documents(state: State_buildIndex) -> dict:
             # validate
             if not isinstance(questions, list) or not all(isinstance(x, str) for x in questions):
                 raise ValueError("'Questions' must be a list of strings")
-            doc.metadata["answeredQuestions"] = questions
+            doc.metadata["answered_questions"] = questions
         except Exception as e:
             print(f"Failed to parse questions: {e} | raw={qa_raw!r}")
-            doc.metadata["answeredQuestions"] = []
+            doc.metadata["answered_questions"] = []
 
         updated_docs.append(doc)
     
     return {"documents": updated_docs}
 
-def create_questions_answered(state: State_buildIndex) -> dict:
-    questions_answered: List[Document] = []
+def create_answered_questions(state: State_buildIndex) -> dict:
+    answered_questions: List[Document] = []
 
     documents = state["documents"]
     for doc in documents:
-        questions = doc.metadata.get("answeredQuestions", []) or []
+        questions = doc.metadata.get("answered_questions", []) or []
         for q in questions:
             new_doc = Document(text=q)
-            new_doc.metadata["severity"] = doc.metadata.get("severity", "")
+            #new_doc.metadata["severity"] = doc.metadata.get("severity", "")
             new_doc.metadata["from_doc_id"] = getattr(doc, "doc_id", None)
-            print(f'newdoc: {new_doc.text}, {new_doc.metadata}')
-            questions_answered.append(new_doc)
-
-    return {"questions_answered": questions_answered}
+            new_doc.metadata["url"] = doc.metadata.get("url", "")
+            print(f'newdoc: {new_doc.text}, {new_doc.metadata}\n')
+            answered_questions.append(new_doc)
+    print(f'Found {len(answered_questions)} answered questions')
+    
+    # remove the similar questions 
+    unique_answered_questions = _deduplicate_semantic_docs_greedy(answered_questions, embed_model= Settings.embed_model, threshold=0.80)
+    
+    print(f'Found {len(unique_answered_questions)} unique_answered questions')
+    
+    # calculated severity for each questions
+    for doc in unique_answered_questions:
+        sev_prompt = severity_for_query_prompt(query = doc.text)
+        sev_resp = state["llm"].invoke(sev_prompt)
+        
+        try:
+            sev_json = json.loads(sev_resp.content)
+            doc.metadata["severity"] = sev_json.get("category", "")
+        except Exception as e:
+            print(f"Severity JSON parse error: {e} | raw={sev_resp.content!r}")
+            doc.metadata["severity"] = ""
+        
+    return {"answered_questions": unique_answered_questions}
 
 def create_log_file(state: State_buildIndex) -> dict:
     # Create a log for each item
@@ -557,10 +613,10 @@ def create_log_excel(state: dict) -> dict:
             })
 
         # Optional console trace
-        print('--------------------------')
-        print(f'doc.metadata: {meta}')
-        preview = (text_str[:200] + "...") if isinstance(text_str, str) and len(text_str) > 200 else text_str
-        print(f'doc.text: {preview}')
+        #print('--------------------------')
+        #print(f'doc.metadata: {meta}')
+        #preview = (text_str[:200] + "...") if isinstance(text_str, str) and len(text_str) > 200 else text_str
+        #print(f'doc.text: {preview}')
 
     df_long = pd.DataFrame(long_rows, columns=[
         "row_index", "meta_path", "value"
@@ -593,7 +649,7 @@ def create_log_excel(state: dict) -> dict:
 
 def persist_storage(state: State_buildIndex) -> dict:
     documents = state["documents"]
-    qa_docs   = state.get("questions_answered", [])
+    qa_docs   = state["answered_questions"]
     name      = state["name"]
     storage   = state["storage"]
     blob_on   = state["blobstorage"]
@@ -613,13 +669,13 @@ builder = StateGraph(State_buildIndex)
 builder.add_node("apify_call_load_documents", apify_call_load_documents)
 builder.add_node("persist_storage", persist_storage)
 builder.add_node("create_metadata_for_documents", create_metadata_for_documents)
-builder.add_node("create_questions_answered", create_questions_answered)
+builder.add_node("create_answered_questions", create_answered_questions)
 builder.add_node("create_log_excel", create_log_excel)
 
 builder.add_edge(START, "apify_call_load_documents")
 builder.add_edge("apify_call_load_documents", "create_metadata_for_documents")
-builder.add_edge("create_metadata_for_documents", "create_questions_answered")
-builder.add_edge("create_questions_answered", "create_log_excel")
+builder.add_edge("create_metadata_for_documents", "create_answered_questions")
+builder.add_edge("create_answered_questions", "create_log_excel")
 builder.add_edge("create_log_excel", "persist_storage")
 
 # 5️⃣ Finally, aggregator → END
