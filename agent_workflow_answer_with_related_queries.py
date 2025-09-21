@@ -111,14 +111,24 @@ def llm_call_related_queries(state: State_AnswerWithRelatedQueries) -> dict:
     else:
         allowed = {"Green", "Yellow", "Red"}
     
-    results_filtred = [
+    results_filtered = [
         r for r in results
         if (r.node.metadata or {}).get("severity") in allowed
     ]  
-        
+
+    if results_filtered:
+        def score_or_min(r):
+            return float("-inf") if (getattr(r, "score", None) is None) else r.score
+
+        max_idx = max(range(len(results_filtered)), key=lambda i: score_or_min(results_filtered[i]))
+        max_score = score_or_min(results_filtered[max_idx])
+
+        if max_score > 0.7:
+            logging.info(f"Dropping top candidate with score {max_score:.3f} (> 0.7)")
+            results_filtered = [r for i, r in enumerate(results_filtered) if i != max_idx]        
 
     candidates = []
-    for r in results_filtred:
+    for r in results_filtered:
         text = r.node.get_text()
         sev = r.node.metadata.get("severity", "")
         doc_id = r.node.metadata.get("from_doc_id", r.node.node_id)  # fallback if missing
