@@ -22,8 +22,7 @@ jobs:
       - name: Set up Python version
         uses: actions/setup-python@v5
         with:
-          python-version: '3.13'
-
+          python-version: '3.11'
       - name: Create and start virtual environment
         run: |
           python -m venv venv
@@ -68,4 +67,5 @@ jobs:
         with:
           app-name: 'helsesvar-chatbot-server-mini'
           slot-name: 'Production'
+
           publish-profile: ${{ secrets.AZUREAPPSERVICE_PUBLISHPROFILE_603BE8C89E5242028C24EEEE8D134B95 }}
