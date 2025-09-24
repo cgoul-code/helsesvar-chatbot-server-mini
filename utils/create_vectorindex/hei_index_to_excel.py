@@ -97,17 +97,15 @@ def export_indexes_to_excel(vector_store, xlsx_path: str):
                 ) from e
 
             # get_all_documents() returns a dict of {node_id: BaseNode}
-            nodes = docstore.docs.items()
-            print(f'Antal noder:{len(nodes)}')
-            rows = []
+           
+            print(f'Antal noder:{len(docstore.docs.items())}')
+            
             # Collect *all* metadata keys to keep columns consistent
             all_meta_keys = set()
 
-            # First pass: build rows and gather metadata keys
             temp = []
             docstore = idx.storage_context.docstore
             nodes = docstore.docs
-            docs = {}
             
             for doc_id, node in nodes.items():
                 meta = getattr(node, "metadata", None) or {}
