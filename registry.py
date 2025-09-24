@@ -15,6 +15,51 @@ class Prompt:
             raise KeyError(f"Missing variable '{missing}' for prompt '{self.id}'") from None
 
 
+VECTORINDEX_SUMMARY = Prompt(
+    id= "vectorindex_summary",
+    template=(
+        "You are given a collection of texts retrieved from a vector index.\n"  
+        "Your task is to create a concise summary of the topics, question types, and subject areas this vector index can help answer.\n"  
+        "\n"  
+        "Requirements:  \n"  
+        "- Provide a list of 5-10 overarching topics.  \n"  
+        "- For each topic, include 1-2 sentences describing the kinds of questions the index can address.  \n"  
+        "- The summary should also explicitly state what kinds of meta-questions it can answer, such as:  \n"  
+        "  - \"What can you answer?\"  \n"  
+        "  - \"Which topics can you answer questions about?\"  \n"  
+        "  - \"What knowledge areas does this index cover?\"  \n"  
+        "  - Do not copy long quotes or detailed explanations from the texts.  \n"  
+        "  - Summarize at a level that makes it easy to understand both the knowledge areas and the scope of the index.  \n"  
+        "\n"  
+        "Here are the texts:  \n"  
+        "{context}\n"  
+    )
+)
+
+
+
+REFINE_QUERY = Prompt(
+    id="refine_query",
+    template=(
+        "You are given a text: {text}\n"
+        "Please refine the user's query in readable way in norwegian.\n"
+        "Ensure that the 'I' form is preserved.\n"
+        "Return only one refined, do not return alternatives\n"
+    )
+)
+
+
+REFINE_QUERY = Prompt(
+    id="refine_query",
+    template=(
+        "You are given a user query: {query}\n"
+        "Please refine the user's query in readable way in norwegian.\n"
+        "Ensure that the 'I' form is preserved.\n"
+        "Return only one refined, do not return alternatives\n"
+    )
+)
+
+
 # === TEMPLATES ===
 SEVERITY_FOR_TEXT = Prompt(
     id="severity_for_text",
@@ -143,6 +188,12 @@ REGISTRY: Dict[str, Prompt] = {
 
 
 # === Helper “renderers” you can import directly ===
+def vectorindex_summary_prompt(text: str) -> str:
+    return VECTORINDEX_SUMMARY.render(text=text)
+
+def refine_query_prompt(query: str) -> str:
+    return REFINE_QUERY.render(query=query)
+
 def severity_for_text_prompt(text: str) -> str:
     return SEVERITY_FOR_TEXT.render(text=text)
 

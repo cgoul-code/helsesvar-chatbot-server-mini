@@ -7,7 +7,11 @@ from typing import List, Literal, Optional
 from typing_extensions import TypedDict
 from sklearn.metrics.pairwise import cosine_similarity
 import registry
-from registry import severity_for_text_prompt, severity_for_query_prompt, qa_subject_no_prompt
+from registry import severity_for_text_prompt, severity_for_query_prompt, qa_subject_no_prompt, vectorindex_summary_prompt
+
+import pandas as pd
+from pandas import json_normalize
+from pathlib import Path
 
 from llama_index.core.base.response.schema import Response
 from llama_index.core.query_engine import BaseQueryEngine
@@ -460,6 +464,20 @@ def create_metadata_for_documents(state: State_buildIndex) -> dict:
     
     return {"documents": updated_docs}
 
+def create_index_summary_doc(state: State_buildIndex) -> dict:
+    
+    context = state["documents_text"]
+    
+    index_summary_prompt = vectorindex_summary_prompt(text=context)
+    index_summary_resp = state["llm"].invoke(index_summary_prompt)
+    summary_raw = index_summary_resp.content
+    
+    doc = Document(text = summary_raw)
+    
+    updated_docs= state["documents"]
+    updated_docs.append(doc)
+    return {"documents": updated_docs}
+
 def create_answered_questions(state: State_buildIndex) -> dict:
     answered_questions: List[Document] = []
 
@@ -493,89 +511,6 @@ def create_answered_questions(state: State_buildIndex) -> dict:
             doc.metadata["severity"] = ""
         
     return {"answered_questions": unique_answered_questions}
-
-def create_log_file(state: State_buildIndex) -> dict:
-    # Create a log for each item
-    # item = state["name"]
-    # documents = state["documents"]
-    # with open(f'combined_documents_for_{item}.txt', 'w', encoding='utf-8') as file:
-    #     print('--------------------------')
-    #     for doc in documents:
-    #         # Robust printing for console
-    #         print(f'doc.metadata: {doc.metadata}')
-    #         print(f'doc.text: {(doc.text[:200] + "...") if isinstance(doc.text, str) and len(doc.text) > 200 else doc.text}')
-
-    #         # Serialize metadata as JSON
-    #         meta_json = json.dumps(doc.metadata or {}, ensure_ascii=False)
-    #         file.write(meta_json + '\n')
-
-    #         # Ensure text is a string
-    #         text_str = doc.text if isinstance(doc.text, str) else ("" if doc.text is None else str(doc.text))
-    #         file.write(text_str + '\n\n')
-    import json
-import pandas as pd
-from pandas import json_normalize
-from pathlib import Path
-
-# def create_log_excel(state: dict) -> dict:
-#     """
-#     Writes two sheets:
-#       - 'raw': metadata as JSON + full text
-#       - 'flattened': metadata expanded into columns (best-effort)
-#     File name: combined_documents_for_{state['name']}.xlsx
-#     """
-#     item = state.get("name", "item")
-#     documents = state.get("documents", [])
-#     safe_item = "".join(c if c.isalnum() or c in ("-", "_") else "_" for c in str(item))
-#     out_path = Path(f"combined_documents_for_{safe_item}.xlsx")
-
-#     rows = []
-#     for idx, doc in enumerate(documents):
-#         meta = getattr(doc, "metadata", None) or {}
-#         text = getattr(doc, "text", None)
-#         text_str = text if isinstance(text, str) else ("" if text is None else str(text))
-#         rows.append({
-#             "row_index": idx,
-#             "item": item,
-#             "metadata_json": json.dumps(meta, ensure_ascii=False),
-#             "text": text_str,
-#         })
-
-#         # Optional: console trace (like your original)
-#         print('--------------------------')
-#         print(f'doc.metadata: {meta}')
-#         preview = (text_str[:200] + "...") if isinstance(text_str, str) and len(text_str) > 200 else text_str
-#         print(f'doc.text: {preview}')
-
-#     # Build DataFrames
-#     df_raw = pd.DataFrame(rows)
-
-#     # Flatten metadata into columns (best-effort)
-#     # If metadata contains nested dicts/lists, json_normalize helps expand keys with dotted paths.
-#     meta_dicts = [json.loads(r["metadata_json"]) if r["metadata_json"] else {} for r in rows]
-#     df_meta = json_normalize(meta_dicts, sep=".")
-#     df_flat = pd.concat([df_raw.drop(columns=["metadata_json"]), df_meta], axis=1)
-
-#     # Write to Excel with a stable engine
-#     with pd.ExcelWriter(out_path, engine="xlsxwriter") as writer:
-#         # Sheet 1: raw
-#         df_raw.to_excel(writer, sheet_name="raw", index=False)
-#         # Sheet 2: flattened
-#         df_flat.to_excel(writer, sheet_name="flattened", index=False)
-
-#         # Basic formatting (optional)
-#         workbook  = writer.book
-#         wrap_fmt  = workbook.add_format({"text_wrap": True, "valign": "top"})
-#         for sheet, text_col in (("raw", "text"), ("flattened", "text")):
-#             ws = writer.sheets[sheet]
-#             # Auto-ish width for first few columns
-#             for col_idx, col_name in enumerate(df_raw.columns if sheet=="raw" else df_flat.columns):
-#                 # Wider column for text
-#                 width = 80 if col_name == text_col else 24
-#                 ws.set_column(col_idx, col_idx, width, wrap_fmt if col_name == text_col else None)
-
-#     print(f"Excel written to: {out_path.resolve()}")
-#     return {}
 
 def create_log_excel(state: dict) -> dict:
     """
