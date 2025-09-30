@@ -175,6 +175,7 @@ Now you’re ready to explore health-related queries with RAG and agent-driven w
 pip freeze >> requirements.txt
 pip install -r requirements.txt
 remember to remove pywin32==306 from requirements.txt
+pywinpty==3.0.0; sys_platform == "win32"
 
 ## to run build script for vectorindex (as a module):
 python -m utils.create_vectorindex.build_hei_index
