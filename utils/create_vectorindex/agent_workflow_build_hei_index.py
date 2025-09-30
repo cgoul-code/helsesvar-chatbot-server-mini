@@ -7,7 +7,7 @@ from typing import List, Literal, Optional
 from typing_extensions import TypedDict
 from sklearn.metrics.pairwise import cosine_similarity
 import registry
-from registry import severity_for_text_prompt, severity_for_query_prompt, qa_subject_no_prompt, vectorindex_summary_prompt
+from registry import severity_for_text_prompt, severity_for_query_prompt, qa_subject_no_prompt, vectorindex_summary_prompt, categorize_text_prompt
 
 import pandas as pd
 from pandas import json_normalize
@@ -360,6 +360,7 @@ def _transform_dataset_item(doc_item, content_type):
         "url": url, 
         "title": title,
         "keywords": keywords,
+        "category":"",
         "description": description,
         "severity":"",
         "answered_questions":""
@@ -428,6 +429,23 @@ def create_metadata_for_documents(state: State_buildIndex) -> dict:
     documents = state["documents"]
     keyword_sets = state.get("keyword_sets", [])
     #print('keyword_sets available to classifier:', keyword_sets)
+    categories = {
+        "Eksen": ["eks", "eksen", "eks-kjæreste", "ex", "skal jeg gå tilbake til eksen", "følelser for eksen", "forelsket i eksen", "hvordan få eksen tilbake", "vinne tilbake eksen", "jeg savner eksen min", "sammen med eksen igjen", "tenker på eksen", "eksen savner meg", "når eksen angrer", "eksen vil ha meg tilbake", "venn med eksen", "hvordan komme over eksen"],
+        "Kjæreste / Forhold": ["kjæreste", "kjærester", "par", "partner", "parforhold", "forhold", "sammen", "holde på", "problemer", "krangler", "sjalu", "sjalusi", "usikkerhet", "tillitsbrudd", "kommunikasjon", "forventning", "samtale", "praten", "avstandsforhold", "vold", "overgrep", "sint", "mistenksom", "svik", "tilgi", "skam", "skyldfølelse"],
+        "Sex / Intimitet": ["sex", "samleie", "kåt", "lyst på sex", "lite lyst", "liten lyst", "frustrert", "frustrerende", "sex med en venn", "vennesex", "sex med en kompis", "sex med en kollega", "må man være kjærester for å ha sex?", "hvem kan jeg ha sex med?", "overtale noen til sex", "overnatting", "overnatte", "sove sammen", "ligge sammen", "sjekke opp", "hooke", "første kyss", "tungekyss", "kyssing"],
+        "Forelskelse / Flørting": ["forelskelse", "forelsket", "forelska", "betatt", "elsker", "besatt", "oppslukt", "kjendisforelskelse", "justin bieber", "første forelskelse", "test forelsket", "tegn på forelskelse", "fysiske symptomer", "hvordan få noen til å like deg", "hvordan få kjæreste", "hvordan få henne/han interessert", "liker han meg", "liker hun meg", "flørt", "flørting", "flørteskole", "flørtetips", "blikkontakt", "initiativ", "første steg", "signaler", "snapchat-flørting", "meldinger", "bilder"],
+        "Vennskap": ["venn", "venner", "venninner", "kamerater", "bestevenn", "vanskelig vennskap", "dårlige venner", "avslutte vennskap", "avsluttet vennskap", "si ifra til en venn", "vennen min hører ikke på meg", "vennen min er forelsket i meg", "forelska i en venn"],
+        "Ekteskap": ["ekteskap", "ekteskapsloven", "gift", "vie", "bryllup", "kirkebryllup", "borgerlig vielse"],
+        "Utroskap": ["utro", "utroskap", "usikkerhet", "tillitsbrudd", "svik", "skam", "skyldfølelse"],
+        "Kjærlighetssorg": ["kjærlighetssorg", "hvordan komme seg over kjærlighetssorg", "hjelp mot kjærlighetssorg", "behandling av kjærlighetssorg", "tips mot kjærlighetssorg", "råd mot kjærlighetssorg", "redd for å bli avvist", "avvisning", "avvist"],
+        "Ungdom / Sosiale tema": ["muslim", "muslimsk kjæreste", "strenge foreldre", "kultur", "barneloven", "kontroll", "foreldre", "nei", "regler", "alder", "aldersforskjell (ung/gammel/eldre)", "fest", "ferie", "tur", "syden", "alkohol", "drikker", "fantasi", "avtaler"],
+        "Aktiviteter / Tips": ["daten", "kino", "middag", "aktivitet", "finne på", "crush", "tips", "råd", "hva skal vi gjøre", "snakke", "småprat"]
+        }
+
+    # Convert to JSON string (pretty-printed)
+    categories_json = json.dumps(categories, ensure_ascii=False, indent=4)
+    
+
     updated_docs = []
         
     for doc in documents:
@@ -440,11 +458,18 @@ def create_metadata_for_documents(state: State_buildIndex) -> dict:
         #     print(f"Severity JSON parse error: {e} | raw={sev_resp.content!r}")
         #     doc.metadata["severity"] = ""
         
+
+        
             
         qa_prompt = qa_subject_no_prompt(text=doc.text)
         qa_resp = state["llm"].invoke(qa_prompt)
         qa_raw = qa_resp.content
         #print('qa raw:', qa_resp.content)
+        
+        category_prompt = categorize_text_prompt(text = doc.text, categories=categories_json)
+        category_resp = state["llm"].invoke(category_prompt)
+        category_raw = category_resp.content
+        print('category_raw: ', category_raw)
         
         # qa_raw is the string you printed
         questions = []
@@ -456,6 +481,11 @@ def create_metadata_for_documents(state: State_buildIndex) -> dict:
             if not isinstance(questions, list) or not all(isinstance(x, str) for x in questions):
                 raise ValueError("'Questions' must be a list of strings")
             doc.metadata["answered_questions"] = questions
+            
+            category_obj = json.loads(category_raw)
+            category = category_obj.get("kategori")
+            doc.metadata["category"] = category
+            
         except Exception as e:
             print(f"Failed to parse questions: {e} | raw={qa_raw!r}")
             doc.metadata["answered_questions"] = []
@@ -489,6 +519,7 @@ def create_answered_questions(state: State_buildIndex) -> dict:
             #new_doc.metadata["severity"] = doc.metadata.get("severity", "")
             new_doc.metadata["from_doc_id"] = getattr(doc, "doc_id", None)
             new_doc.metadata["url"] = doc.metadata.get("url", "")
+            new_doc.metadata["category"]= doc.metadata.get("category", "")
             print(f'newdoc: {new_doc.text}, {new_doc.metadata}\n')
             answered_questions.append(new_doc)
     print(f'Found {len(answered_questions)} answered questions')

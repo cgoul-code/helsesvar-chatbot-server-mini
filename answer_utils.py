@@ -114,6 +114,114 @@ def get_structured_answer(
 
 #----------------------------------------------------------
 
+categories = [
+  {
+    "name": "Eksen",
+    "subcategories": ["eks","eksen","eks-kjæreste","ex","skal jeg gå tilbake til eksen","følelser for eksen","forelsket i eksen","hvordan få eksen tilbake","vinne tilbake eksen","jeg savner eksen min","sammen med eksen igjen","tenker på eksen","eksen savner meg","når eksen angrer","eksen vil ha meg tilbake","venn med eksen","hvordan komme over eksen"],
+    "weight": 17,
+    "related": [
+      {"name":"Kjæreste / Forhold","weight":27},
+      {"name":"Vennskap","weight":13},
+      {"name":"Kjærlighetssorg","weight":9}
+    ]
+  },
+  {
+    "name": "Kjæreste / Forhold",
+    "subcategories": ["kjæreste","kjærester","par","partner","parforhold","forhold","sammen","holde på","problemer","krangler","sjalu","sjalusi","usikkerhet","tillitsbrudd","kommunikasjon","forventning","samtale","praten","avstandsforhold","vold","overgrep","sint","mistenksom","svik","tilgi","skam","skyldfølelse"],
+    "weight": 27,
+    "related": [
+      {"name":"Eksen","weight":17},
+      {"name":"Vennskap","weight":13},
+      {"name":"Ekteskap","weight":7},
+      {"name":"Utroskap","weight":7},
+      {"name":"Kjærlighetssorg","weight":9},
+      {"name":"Sex / Intimitet","weight":24},
+      {"name":"Forelskelse / Flørting","weight":29}
+    ]
+  },
+  {
+    "name": "Sex / Intimitet",
+    "subcategories": ["sex","samleie","kåt","lyst på sex","lite lyst","liten lyst","frustrert","frustrerende","sex med en venn","vennesex","sex med en kompis","sex med en kollega","må man være kjærester for å ha sex?","hvem kan jeg ha sex med?","overtale noen til sex","overnatting","overnatte","sove sammen","ligge sammen","sjekke opp","hooke","første kyss","tungekyss","kyssing"],
+    "weight": 24,
+    "related": [
+      {"name":"Kjæreste / Forhold","weight":27},
+      {"name":"Utroskap","weight":7},
+      {"name":"Ekteskap","weight":7},
+      {"name":"Forelskelse / Flørting","weight":29}
+    ]
+  },
+  {
+    "name": "Forelskelse / Flørting",
+    "subcategories": ["forelskelse","forelsket","forelska","betatt","elsker","besatt","oppslukt","kjendisforelskelse","justin bieber","første forelskelse","test forelsket","tegn på forelskelse","fysiske symptomer","hvordan få noen til å like deg","hvordan få kjæreste","hvordan få henne/han interessert","liker han meg","liker hun meg","flørt","flørting","flørteskole","flørtetips","blikkontakt","initiativ","første steg","signaler","snapchat-flørting","meldinger","bilder"],
+    "weight": 29,
+    "related": [
+      {"name":"Sex / Intimitet","weight":24},
+      {"name":"Kjærlighetssorg","weight":9},
+      {"name":"Ungdom / Sosiale tema","weight":19},
+      {"name":"Aktiviteter / Tips","weight":11}
+    ]
+  },
+  {
+    "name": "Vennskap",
+    "subcategories": ["venn","venner","venninner","kamerater","bestevenn","vanskelig vennskap","dårlige venner","avslutte vennskap","avsluttet vennskap","si ifra til en venn","vennen min hører ikke på meg","vennen min er forelsket i meg","forelska i en venn"],
+    "weight": 13,
+    "related": [
+      {"name":"Eksen","weight":17},
+      {"name":"Aktiviteter / Tips","weight":11},
+      {"name":"Ungdom / Sosiale tema","weight":19},
+      {"name":"Kjæreste / Forhold","weight":27}
+    ]
+  },
+  {
+    "name": "Ekteskap",
+    "subcategories": ["ekteskap","ekteskapsloven","gift","vie","bryllup","kirkebryllup","borgerlig vielse"],
+    "weight": 7,
+    "related": [
+      {"name":"Kjæreste / Forhold","weight":27},
+      {"name":"Sex / Intimitet","weight":24}
+    ]
+  },
+  {
+    "name": "Utroskap",
+    "subcategories": ["utro","utroskap","usikkerhet","tillitsbrudd","svik","skam","skyldfølelse"],
+    "weight": 7,
+    "related": [
+      {"name":"Sex / Intimitet","weight":24},
+      {"name":"Kjæreste / Forhold","weight":27}
+    ]
+  },
+  {
+    "name": "Kjærlighetssorg",
+    "subcategories": ["kjærlighetssorg","hvordan komme seg over kjærlighetssorg","hjelp mot kjærlighetssorg","behandling av kjærlighetssorg","tips mot kjærlighetssorg","råd mot kjærlighetssorg","redd for å bli avvist","avvisning","avvist"],
+    "weight": 9,
+    "related": [
+      {"name":"Forelskelse / Flørting","weight":29},
+      {"name":"Eksen","weight":17},
+      {"name":"Kjæreste / Forhold","weight":27}
+    ]
+  },
+  {
+    "name": "Ungdom / Sosiale tema",
+    "subcategories": ["muslim","muslimsk kjæreste","strenge foreldre","kultur","barneloven","kontroll","foreldre","nei","regler","alder","aldersforskjell (ung/gammel/eldre)","fest","ferie","tur","syden","alkohol","drikker","fantasi","avtaler"],
+    "weight": 19,
+    "related": [
+      {"name":"Vennskap","weight":13},
+      {"name":"Aktiviteter / Tips","weight":11},
+      {"name":"Forelskelse / Flørting","weight":29}
+    ]
+  },
+  {
+    "name": "Aktiviteter / Tips",
+    "subcategories": ["daten","kino","middag","aktivitet","finne på","crush","tips","råd","hva skal vi gjøre","snakke","småprat"],
+    "weight": 11,
+    "related": [
+      {"name":"Ungdom / Sosiale tema","weight":19},
+      {"name":"Vennskap","weight":13},
+      {"name":"Forelskelse / Flørting","weight":29}
+    ]
+  }
+]
+
 def get_answer_with_related_queries(
     query_settings: QuerySettings,
     server_settings: ServerSettings,
@@ -289,6 +397,7 @@ def get_answer_with_related_queries(
         "query": query_settings.user_content,
         "similarity_cutoff": query_settings.similarity_cutoff,
         "relevancy_cutoff" : query_settings.relevancy_cutoff,
+        "categories": categories,
         # defaults:
         "response": None,
         "answer": "",

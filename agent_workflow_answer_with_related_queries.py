@@ -1,19 +1,15 @@
-import os
-import re
+
 import logging
 import json
-from typing import List, Literal
+from typing import List, Literal, Dict, Any
 from typing_extensions import TypedDict
-from json_utils import safe_parse_json
-from registry import severity_for_text_prompt, qa_subject_no_prompt, qa_query_rerank_ids_prompt, refine_query_prompt
+from registry import severity_for_text_prompt, qa_query_rerank_ids_prompt, refine_query_prompt, categorize_text_prompt
 
 from llama_index.core.base.response.schema import Response
 from llama_index.core.query_engine import BaseQueryEngine
 from llama_index.core.retrievers import BaseRetriever
-from llama_index.embeddings.azure_openai import AzureOpenAIEmbedding
 
 from langgraph.graph import StateGraph, START, END
-
 
 # === Data types ===
 class Reference(TypedDict):
@@ -31,9 +27,11 @@ class State_AnswerWithRelatedQueries(TypedDict):
     query_engine_related_queries: BaseQueryEngine
     retriever_related_queries: BaseRetriever
     vector_index_description: str
+    categories: List[Dict[str, Any]]
     query: str
     refined_query: str
     query_severity:Literal["Green", "Yellow", "Red", ""]
+    related_categories: str
     similarity_cutoff: float
     relevancy_cutoff: float
     relevancy_band: str
@@ -48,6 +46,18 @@ class State_AnswerWithRelatedQueries(TypedDict):
 
 
 # === Helpers ===
+
+def _build_category_index(categories: List[Dict[str, Any]]) -> Dict[str, Dict[str, Any]]:
+    return {c["name"]: c for c in categories}
+
+def _get_related(categories: List[Dict[str, Any]], name: str):
+    idx = _build_category_index(categories)
+    cat = idx.get(name)
+    return cat.get("related", []) if cat else []
+
+def _get_related_category_names(categories, name: str):
+    return [r["name"] for r in _get_related(categories, name)]
+
 def _classify_relevancy(score: float, thresholds: dict[str, float]) -> str:
     """
     thresholds: dict with descending levels. Example:
@@ -72,14 +82,28 @@ def llm_call_refine_query(state: State_AnswerWithRelatedQueries) -> dict:
     logging.info(f'---result---: llm_call_refine_query: {msg.content}')
     return {"refined_query": msg.content}
 
-def llm_call_severity(state: State_AnswerWithRelatedQueries) -> dict:
+def llm_call_severity_and_category(state: State_AnswerWithRelatedQueries) -> dict:
 
     llm = state["llm"]
     refined_query = state["refined_query"]
+    categories = state["categories"]
     sev_prompt = severity_for_text_prompt(refined_query)
     msg = llm.invoke(sev_prompt)
     logging.info(f'---result---: llm_call_severity: {msg.content}')
     
+    categories_json = json.dumps(categories, ensure_ascii=False, indent=4)      
+    category_prompt = categorize_text_prompt(text = state["refined_query"], categories=categories_json)
+    category_resp = state["llm"].invoke(category_prompt)
+    
+    cat_json = json.loads(category_resp.content)
+    cat_name = cat_json.get("kategori")
+    
+    print('category: ', cat_name)
+    related_categories = ""
+    if cat_name is not "Ukjent":
+        related_categories = _get_related_category_names(categories, cat_name)
+        print(f'Relaterte kategorier: {related_categories}')
+
     severity =""
     try:
         sev_json = json.loads(msg.content)
@@ -88,7 +112,7 @@ def llm_call_severity(state: State_AnswerWithRelatedQueries) -> dict:
         print(f"Severity JSON parse error: {e} | raw={msg.content!r}")
         severity = ""
     
-    return {"query_severity": severity}
+    return {"query_severity": severity, "related_categories" : related_categories}
 
 def llm_call_answer(state: State_AnswerWithRelatedQueries) -> dict:
     
@@ -226,7 +250,7 @@ def validate_response(state: State_AnswerWithRelatedQueries) -> dict:
     # Keep your current two-way routing, but annotate the band + best score.
     if band == "Rejected":
         vector_index_desc = state["vector_index_description"]
-        feedback = (f"Jeg beklager!"
+        feedback = (f"Jeg beklager! "
                     f"Hvis du har spørsmål om disse emnene: \"{vector_index_desc}\", kan jeg prøve å hjelpe.")
         return {
             "validate_response_result": "Rejected",
@@ -298,7 +322,9 @@ def aggregator(state: State_AnswerWithRelatedQueries) -> dict:
            
         combined += f"## Sporing (test)\n"     
         combined += f"Farge på spørsmålet: {state['query_severity']}\n"
-        combined += f"Svarrelevans: {state['relevancy_band']}\n"
+        #combined += f"Svarrelevans: {state['relevancy_band']}\n"
+        related_cat = f"'Related categories': {state['related_categories']}"
+        combined +="{"+related_cat+"}"
                 
         return {"structured_answer": combined}
 
@@ -309,12 +335,12 @@ builder = StateGraph(State_AnswerWithRelatedQueries)
 # 1️⃣ Core answer + validation
 builder.add_node("llm_call_answer", llm_call_answer)
 builder.add_node("llm_call_refine_query", llm_call_refine_query)
-builder.add_node("llm_call_severity", llm_call_severity)
+builder.add_node("llm_call_severity_and_category", llm_call_severity_and_category)
 builder.add_node("validate_response", validate_response)
 
 builder.add_edge(START, "llm_call_refine_query")
-builder.add_edge("llm_call_refine_query", "llm_call_severity")
-builder.add_edge("llm_call_severity", "llm_call_answer")
+builder.add_edge("llm_call_refine_query", "llm_call_severity_and_category")
+builder.add_edge("llm_call_severity_and_category", "llm_call_answer")
 builder.add_edge("llm_call_answer", "validate_response")
 
 

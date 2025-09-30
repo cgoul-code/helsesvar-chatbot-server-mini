@@ -13,6 +13,23 @@ class Prompt:
         except KeyError as e:
             missing = str(e).strip("'")
             raise KeyError(f"Missing variable '{missing}' for prompt '{self.id}'") from None
+        
+        
+CATEGORIZE_TEXT = Prompt(
+    id = "caegorize_text",
+    template=(
+        "Du skal kategorisere en tekst innenfor én av hovedkategoriene nedenfor. \n"
+        "Hver hovedkategori har en liste med underkategorier og nøkkelord som hjelper deg å bestemme. \n"
+        "Velg kun ÉN hovedkategori, den som passer best. \n"
+        "Hvis ingen passer, svar 'Ukjent'.\n"
+        "Hovedkategorier med underkategorier: {categories}\n"
+        "\n"
+        "Tekst: {text}\n"
+        "\n"
+        "Svarformat (kun JSON):\n"
+        '{{\"kategori\": \"<hovedkategori>\"}}'
+    )
+)
 
 
 VECTORINDEX_SUMMARY = Prompt(
@@ -181,6 +198,7 @@ QUERY_RERANK_IDS = Prompt(
 
 # (Optional) A small registry if you prefer string-based lookups
 REGISTRY: Dict[str, Prompt] = {
+    CATEGORIZE_TEXT.id: CATEGORIZE_TEXT,
     SEVERITY_FOR_TEXT.id: SEVERITY_FOR_TEXT,
     SEVERITY_FOR_QUERY.id: SEVERITY_FOR_QUERY,
     QA_SUBJECT_NO.id: QA_SUBJECT_NO,
@@ -188,6 +206,9 @@ REGISTRY: Dict[str, Prompt] = {
 
 
 # === Helper “renderers” you can import directly ===
+def categorize_text_prompt(text: str, categories: str) -> str:
+    return CATEGORIZE_TEXT.render(text=text, categories=categories)
+
 def vectorindex_summary_prompt(text: str) -> str:
     return VECTORINDEX_SUMMARY.render(text=text)
 
