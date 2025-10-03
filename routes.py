@@ -1,45 +1,111 @@
-from quart import request, jsonify, Response
-import logging
-from config import (server_settings, vector_store)
-from query_utils import (get_query_settings)
-from answer_utils import get_structured_answer, get_answer_with_related_queries
+from quart import request, Response
+import logging, json, asyncio
+from config import server_settings, vector_store
+from query_utils import get_query_settings
+from answer_utils import (
+    get_answer_structured_as_stream,
+    get_answer_with_related_queries_as_stream,
+)
 
-# Agent registry: kartlegger agent-navn til funksjon
+# Agents must be async generators that yield small dict/str chunks
 AGENT_REGISTRY = {
-    "hvaerinnafor": get_answer_with_related_queries,
-    "structured": get_structured_answer,
-    # legg til flere agenter her…
+    "hvaerinnafor": get_answer_with_related_queries_as_stream,
+    "structured": get_answer_structured_as_stream,
 }
 
+def _format_sse(data: str, event: str | None = None) -> str:
+    """Format one SSE message (optionally named), ending with a blank line."""
+    lines = []
+    if event:
+        lines.append(f"event: {event}")
+    for line in (data.splitlines() or [""]):
+        lines.append(f"data: {line}")
+    lines.append("")  # blank line terminator
+    return "\n".join(lines)
+
 def register_routes(app):
-    @app.route("/chat", methods=["POST"])
+    @app.route("/chat", methods=["POST", "OPTIONS"])
     async def chat():
-        # Check if indexes are loaded
+        # Simple CORS (adjust as needed)
+        if request.method == "OPTIONS":
+            return Response(
+                "",
+                headers={
+                    "Access-Control-Allow-Origin": "*",
+                    "Access-Control-Allow-Headers": "Content-Type, Accept",
+                    "Access-Control-Allow-Methods": "POST, OPTIONS",
+                },
+            )
+
+        # Index readiness
         status, indexes_loaded = server_settings.get_status()
         if not indexes_loaded:
             logging.warning("Indexes are still loading...")
-            logging.info(f'Server status: {status}')
+            logging.info(f"Server status: {status}")
             return {"error": "Indexes are still loading, please try again later."}, 503
-        
+
         try:
-            json_request = await request.get_json()
-            logging.info("Received /chat payload: %r", json_request)
-            # your real logic here...
-            
-            query_settings = get_query_settings(json_request)
-            
-              # --- 4) Velg riktig agent-funksjon ---
-            agent_name = query_settings.agent
+            payload = await request.get_json()
+            logging.info("Received /chat payload: %r", payload)
+
+            query_settings = get_query_settings(payload)
+            agent_name = getattr(query_settings, "agent", None)
             agent_fn = AGENT_REGISTRY.get(agent_name)
-            print(f'------->(name:{agent_name}, fn:{agent_fn})<--------------')
             if agent_fn is None:
-                logging.error(f"Unknown agent requested: {agent_name}")
+                logging.error("Unknown agent requested: %s", agent_name)
                 return {"error": f"Unknown agent '{agent_name}'"}, 400
-            
-            answer = agent_fn(query_settings, server_settings, vector_store)
-            return {"answer": answer}, 200
-        
+
+            async def stream_answer():
+                # open event (optional, but handy for client state)
+                yield _format_sse(json.dumps({"event": "open", "message": "ok"}, ensure_ascii=False))
+
+                # heartbeats so proxies don’t drop idle connections
+                heartbeat_interval = 20
+                last_sent = asyncio.get_event_loop().time()
+
+                try:
+                    async for chunk in agent_fn(query_settings, server_settings, vector_store):
+                        # normalize to string
+                        if isinstance(chunk, (dict, list)):
+                            data = json.dumps(chunk, ensure_ascii=False)
+                        else:
+                            data = str(chunk)
+
+                        # emit the chunk
+                        yield _format_sse(data)
+                        last_sent = asyncio.get_event_loop().time()
+
+                        # cooperative yield helps flushing on some servers
+                        await asyncio.sleep(0)
+
+                        # opportunistic heartbeat (rarely used since we’re sending data)
+                        now = asyncio.get_event_loop().time()
+                        if now - last_sent >= heartbeat_interval:
+                            # SSE comment = heartbeat
+                            yield ": ping\n\n"
+                            last_sent = now
+
+                except (asyncio.CancelledError, GeneratorExit):
+                    # client went away; stop quietly
+                    return
+                except Exception as e:
+                    # send an error event before closing
+                    err = {"error": str(e)}
+                    yield _format_sse(json.dumps({"event":"error", **err}, ensure_asciwi=False))
+                finally:
+                    # signal completion
+                    yield _format_sse(json.dumps({"event": "done"}, ensure_ascii=False))
+
+            headers = {
+                "Content-Type": "text/event-stream; charset=utf-8",
+                "Cache-Control": "no-cache",
+                "Connection": "keep-alive",
+                "X-Accel-Buffering": "no",  # important behind nginx
+                "Access-Control-Allow-Origin": "*",  # if you need CORS
+            }
+            return Response(stream_answer(), headers=headers)
+
         except Exception as e:
             logging.error("Error in /chat handler", exc_info=True)
-            status = getattr(e, "code", 500)          # default to 500 if no .code
+            status = getattr(e, "code", 500)
             return {"error": str(e)}, status

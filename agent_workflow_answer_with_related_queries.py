@@ -4,6 +4,7 @@ import json
 from typing import List, Literal, Dict, Any
 from typing_extensions import TypedDict
 from registry import severity_for_text_prompt, qa_query_rerank_ids_prompt, refine_query_prompt, categorize_text_prompt
+from langgraph.config import get_stream_writer
 
 from llama_index.core.base.response.schema import Response
 from llama_index.core.query_engine import BaseQueryEngine
@@ -67,13 +68,14 @@ def _classify_relevancy(score: float, thresholds: dict[str, float]) -> str:
     s = float(score)
     if s >= thresholds.get("strong", 0.60): return "Strong"
     if s >= thresholds.get("medium", 0.45): return "Medium"
-    if s >= thresholds.get("weak", 0.35):   return "Weak"
+    if s >= thresholds.get("weak", 0.35):   return "Rejected"
     return "Rejected"
 
 
 # === Node functions ===
 def llm_call_refine_query(state: State_AnswerWithRelatedQueries) -> dict:
-
+    writer = get_stream_writer()
+    writer({"event": "info", "message": "Renskriver spørsmålet."})
     llm = state["llm"]
     query = state["query"]
     refine_prompt = refine_query_prompt(query=query)
@@ -83,7 +85,9 @@ def llm_call_refine_query(state: State_AnswerWithRelatedQueries) -> dict:
     return {"refined_query": msg.content}
 
 def llm_call_severity_and_category(state: State_AnswerWithRelatedQueries) -> dict:
-
+    writer = get_stream_writer()
+    writer({"event": "info", "message": "Kategoriserer."})
+    
     llm = state["llm"]
     refined_query = state["refined_query"]
     categories = state["categories"]
@@ -100,7 +104,7 @@ def llm_call_severity_and_category(state: State_AnswerWithRelatedQueries) -> dic
     
     print('category: ', cat_name)
     related_categories = ""
-    if cat_name is not "Ukjent":
+    if cat_name != "Ukjent":
         related_categories = _get_related_category_names(categories, cat_name)
         print(f'Relaterte kategorier: {related_categories}')
 
@@ -115,14 +119,20 @@ def llm_call_severity_and_category(state: State_AnswerWithRelatedQueries) -> dic
     return {"query_severity": severity, "related_categories" : related_categories}
 
 def llm_call_answer(state: State_AnswerWithRelatedQueries) -> dict:
+    writer = get_stream_writer()
+    writer({"event": "info", "message": "Svarer."})
     
     response_obj = state["query_engine"].query(state["refined_query"])
     #logging.info(f'---step---: llm_call_answer:{response_obj.response}')
     return {"answer": response_obj.response, "response": response_obj}
 
+
 def llm_call_related_queries(state: State_AnswerWithRelatedQueries) -> dict:
 
     # Step 1: Retrieve candidates from vector index
+    writer = get_stream_writer()
+    writer({"event": "info", "message": "Henter lignende spørsmål."})
+    
     retriever = state["retriever_related_queries"]
     results = retriever.retrieve(state["refined_query"])
     query_severity = state["query_severity"]
@@ -220,10 +230,17 @@ def llm_call_related_queries(state: State_AnswerWithRelatedQueries) -> dict:
     
 
 def validate_response(state: State_AnswerWithRelatedQueries) -> dict:
-    # configurable band thresholds; fallbacks if not provided
+    writer = get_stream_writer()
+    writer({"event": "info", "message": "Validerer."})
+    
+    # Helper to emit a chunk the client can append
+    # (Use a consistent shape so your client knows how to handle it.)
+    def emit(delta: str, event: str = "chunk"):
+        writer({"event": event, "structured_answer_delta": delta})
+
     thresholds = state.get("relevancy_thresholds", {
         "strong": 0.60,
-        "medium": 0.45,
+        "medium": 0.45,   # anything below = Rejected
         "weak":   0.35,   # anything below = Rejected
     })
 
@@ -240,10 +257,10 @@ def validate_response(state: State_AnswerWithRelatedQueries) -> dict:
         }
 
     best = max(nodes, key=lambda n: n.score)
-    # for n in nodes:
-    #     print(f'score:{n.score}')
+    for n in nodes:
+        print(f'score:{n.score}')
         
-    # print(f'best score:{best.score}')
+    print(f'best score:{best.score}')
 
     band = _classify_relevancy(best.score, thresholds)
 
@@ -259,6 +276,20 @@ def validate_response(state: State_AnswerWithRelatedQueries) -> dict:
             "best_node_score": best.score,
         }
     else:
+        combined_parts = []
+        part = f"## Du spurte\n{state['refined_query']}\n"
+        combined_parts.append(part); emit(part)
+
+        part = f"## Svar\n"
+        combined_parts.append(part); emit(part)
+
+        # Stream the answer line-by-line (or token-by-token if you have it):
+        answer = state.get("answer") or ""
+        for line in answer.splitlines(True):   # keep line breaks
+            combined_parts.append(line)
+            emit(line)
+        emit("\n")
+        
         return {
             "validate_response_result": "Accepted",
             "relevancy_band": band,
@@ -276,6 +307,9 @@ def response_builder_node(state: State_AnswerWithRelatedQueries) -> dict:
 
 
 def references_generator(state: State_AnswerWithRelatedQueries) -> dict:
+    writer = get_stream_writer()
+    writer({"event": "info", "message": "Henter referansene."})
+    
     relevancy_cutoff = state["relevancy_cutoff"]
     refs: List[Reference] = []
     seen = set()  # track already added (e.g. by URL)
@@ -299,34 +333,60 @@ def references_generator(state: State_AnswerWithRelatedQueries) -> dict:
 
 
 def aggregator(state: State_AnswerWithRelatedQueries) -> dict:
-    
+    writer = get_stream_writer()
+    writer({"event": "info", "message": "Ferdigstiller."})
+
+    # Helper to emit a chunk the client can append
+    # (Use a consistent shape so your client knows how to handle it.)
+    def emit(delta: str, event: str = "chunk"):
+        writer({"event": event, "structured_answer_delta": delta})
+
+    # If rejected: stream the feedback and finish
     if state["validate_response_result"] == "Rejected":
-        feedback = state["feedback"] 
+        feedback = state["feedback"] or "Beklager, jeg fant ikke relevant info."
+        emit(feedback + "\n")
+        writer({"event": "done"})  # tell client to stop appending
         return {"structured_answer": feedback}
-    else:
 
-        combined = f"## Du spurte\n{state['refined_query']}\n"
-        combined += f"## Svar\n{state['answer']}\n"
-        
-        if state['references']:
-            combined += "## Referanser\n"
-            for r in state['references']:
-                #combined += f"- [{r['name']}]({r['url']}) (Relevans: {r['relevance_index']:.2f})\n"
-                combined += f"- [{r['name']}]({r['url']}) \n"
+    # Otherwise: build + stream in parts
+    combined_parts = []
 
-        combined += "## Lignende spørsmål\n"
-        for r in (state.get("related_queries") or [])[:5]:
+    # References (stream each bullet)
+    refs = state.get("references") or []
+    if refs:
+        header = "## Referanser\n"
+        combined_parts.append(header); emit(header)
+        for r in refs:
+            bullet = f"- [{r['name']}]({r['url']}) \n"
+            combined_parts.append(bullet); emit(bullet)
+
+    # Related queries
+    rq = (state.get("related_queries") or [])[:5]
+    if rq:
+        header = "## Lignende spørsmål\n"
+        combined_parts.append(header); emit(header)
+        for r in rq:
             q = r.get("query") or r.get("text") or r.get("q")
             if q:
-                combined += f"=={q}==\n"
-           
-        combined += f"## Sporing (test)\n"     
-        combined += f"Farge på spørsmålet: {state['query_severity']}\n"
-        #combined += f"Svarrelevans: {state['relevancy_band']}\n"
-        related_cat = f"'Related categories': {state['related_categories']}"
-        combined +="{"+related_cat+"}"
-                
-        return {"structured_answer": combined}
+                line = f"=={q}==\n"
+                combined_parts.append(line); emit(line)
+
+    # Debug / tracking
+    track = []
+
+    # Inline the related categories JSON-ish block
+    rel = state.get("related_categories") or []
+    track.append(json.dumps(rel, ensure_ascii=False))
+    part = "".join(track)
+    combined_parts.append(part); emit(part, event="Related categories")
+
+    # Signal the end of stream
+    writer({"event": "done"})
+
+    # Return the full text to keep it in state
+    combined = "".join(combined_parts)
+    return {"structured_answer": combined}
+
 
 
 # === Build static, stateless workflow ===
@@ -339,9 +399,9 @@ builder.add_node("llm_call_severity_and_category", llm_call_severity_and_categor
 builder.add_node("validate_response", validate_response)
 
 builder.add_edge(START, "llm_call_refine_query")
-builder.add_edge("llm_call_refine_query", "llm_call_severity_and_category")
-builder.add_edge("llm_call_severity_and_category", "llm_call_answer")
+builder.add_edge("llm_call_refine_query", "llm_call_answer")
 builder.add_edge("llm_call_answer", "validate_response")
+builder.add_edge("validate_response", "llm_call_severity_and_category")
 
 
 # 2️⃣ Branch on validation result:
