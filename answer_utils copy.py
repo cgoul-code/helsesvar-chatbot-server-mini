@@ -11,11 +11,11 @@ import IPython
 
 
 
-async def get_answer_structured_as_stream(
+def get_structured_answer(
     query_settings: QuerySettings,
     server_settings: ServerSettings,
     vector_store: VectorIndexStore
-):
+) -> str:
     print('------------->>get_structured_answer')
     # 1) Try to load the requested index
     vec_name = query_settings.vectorIndex
@@ -75,7 +75,6 @@ async def get_answer_structured_as_stream(
         text_qa_template=text_qa_template,
         summary_template=text_qa_template,
         structured_answer_filtering=True,
-        streaming = True,
         verbose=True,
     )
     
@@ -105,9 +104,13 @@ async def get_answer_structured_as_stream(
         "structured_answer": "",
     }
 
-    # ✅ This is  an **async generator**
-    async for chunk in optimizer_workflow.astream(init_state, stream_mode="custom"):
-        yield chunk
+    final_state = optimizer_workflow.invoke(init_state)
+    
+    from IPython.display import Markdown
+    Markdown(final_state["structured_answer"])
+
+    # 6) Return the raw string
+    return final_state["structured_answer"]
 
 #----------------------------------------------------------
 
@@ -219,11 +222,11 @@ categories = [
   }
 ]
 
-async def get_answer_with_related_queries_as_stream(
+def get_answer_with_related_queries(
     query_settings: QuerySettings,
     server_settings: ServerSettings,
     vector_store: VectorIndexStore
-):
+) -> str:
     print('------------->>get_answer_with_related_queries')
     # 1) Try to load the requested index
     vec_name = query_settings.vectorIndex
@@ -299,7 +302,6 @@ async def get_answer_with_related_queries_as_stream(
         text_qa_template=text_qa_template,
         summary_template=text_qa_template,
         structured_answer_filtering=True,
-        streaming=False,
         verbose=True,
     )
     
@@ -365,7 +367,7 @@ async def get_answer_with_related_queries_as_stream(
     response_related_queries_synthesizer = get_response_synthesizer(
         response_mode= "tree_summarize",
         summary_template= text_rq_template, 
-        streaming = True,
+        streaming = False,
         structured_answer_filtering=True, 
         verbose=True)
     
@@ -407,7 +409,10 @@ async def get_answer_with_related_queries_as_stream(
         "structured_answer": "",
     }
 
-    # ✅ This is  an **async generator**
-    async for chunk in answer_with_related_queries_workflow.astream(init_state, stream_mode="custom"):
-        yield chunk
+    final_state = answer_with_related_queries_workflow.invoke(init_state)
+    
+    from IPython.display import Markdown
+    Markdown(final_state["structured_answer"])
 
+    # 6) Return the raw string
+    return final_state["structured_answer"]
