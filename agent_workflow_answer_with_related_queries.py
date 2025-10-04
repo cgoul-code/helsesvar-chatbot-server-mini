@@ -3,7 +3,7 @@ import logging
 import json
 from typing import List, Literal, Dict, Any
 from typing_extensions import TypedDict
-from registry import severity_for_text_prompt, qa_query_rerank_ids_prompt, refine_query_prompt, categorize_text_prompt
+from registry import qa_query_rerank_ids_prompt
 from langgraph.config import get_stream_writer
 
 from llama_index.core.base.response.schema import Response
@@ -28,11 +28,12 @@ class State_AnswerWithRelatedQueries(TypedDict):
     query_engine_related_queries: BaseQueryEngine
     retriever_related_queries: BaseRetriever
     vector_index_description: str
+    main_category: str
     categories: List[Dict[str, Any]]
     query: str
     refined_query: str
     query_severity:Literal["Green", "Yellow", "Red", ""]
-    related_categories: str
+    related_categories: List[str]
     similarity_cutoff: float
     relevancy_cutoff: float
     relevancy_band: str
@@ -73,50 +74,40 @@ def _classify_relevancy(score: float, thresholds: dict[str, float]) -> str:
 
 
 # === Node functions ===
-def llm_call_refine_query(state: State_AnswerWithRelatedQueries) -> dict:
-    writer = get_stream_writer()
-    writer({"event": "info", "message": "Renskriver spørsmålet."})
-    llm = state["llm"]
-    query = state["query"]
-    refine_prompt = refine_query_prompt(query=query)
-    msg = llm.invoke(refine_prompt)
-        
-    logging.info(f'---result---: llm_call_refine_query: {msg.content}')
-    return {"refined_query": msg.content}
 
-def llm_call_severity_and_category(state: State_AnswerWithRelatedQueries) -> dict:
+def llm_refine_and_classify(state: State_AnswerWithRelatedQueries) -> dict:
     writer = get_stream_writer()
-    writer({"event": "info", "message": "Kategoriserer."})
-    
-    llm = state["llm"]
-    refined_query = state["refined_query"]
-    categories = state["categories"]
-    sev_prompt = severity_for_text_prompt(refined_query)
-    msg = llm.invoke(sev_prompt)
-    logging.info(f'---result---: llm_call_severity: {msg.content}')
-    
-    categories_json = json.dumps(categories, ensure_ascii=False, indent=4)      
-    category_prompt = categorize_text_prompt(text = state["refined_query"], categories=categories_json)
-    category_resp = state["llm"].invoke(category_prompt)
-    
-    cat_json = json.loads(category_resp.content)
-    cat_name = cat_json.get("kategori")
-    
-    print('category: ', cat_name)
-    related_categories = ""
-    if cat_name != "Ukjent":
-        related_categories = _get_related_category_names(categories, cat_name)
-        print(f'Relaterte kategorier: {related_categories}')
+    writer({"event": "info", "message": "Renskriver og klassifiserer."})
 
-    severity =""
+    llm = state["llm"]
+    categories_json = json.dumps(state["categories"], ensure_ascii=False, indent=2)
+
+    from registry import refine_and_classify_prompt  # import the helper
+    prompt = refine_and_classify_prompt(query=state["query"], categories=categories_json)
+
+    msg = llm.invoke(prompt)
     try:
-        sev_json = json.loads(msg.content)
-        severity = sev_json.get("category", "")
+        obj = json.loads(msg.content)
     except Exception as e:
-        print(f"Severity JSON parse error: {e} | raw={msg.content!r}")
-        severity = ""
-    
-    return {"query_severity": severity, "related_categories" : related_categories}
+        # fail-soft: if parsing breaks, keep going with original query
+        logging.error(f"refine_and_classify JSON parse error: {e} | raw={msg.content!r}")
+        obj = {"refined_query": state["query"], "severity": "", "category": "Ukjent"}
+
+    refined_query = obj.get("refined_query", state["query"])
+    severity = obj.get("severity", "")
+    cat_name = obj.get("category", "Ukjent")
+    print(f'cat name:', cat_name)
+
+    related = _get_related_category_names(state["categories"], cat_name) if cat_name != "Ukjent" else []
+
+    return {
+        "refined_query": refined_query,
+        "query_severity": severity,
+        "main_category": cat_name,
+        "related_categories": related,
+    }
+
+
 
 def llm_call_answer(state: State_AnswerWithRelatedQueries) -> dict:
     writer = get_stream_writer()
@@ -196,36 +187,6 @@ def llm_call_related_queries(state: State_AnswerWithRelatedQueries) -> dict:
 
     return {"related_queries": related}
     
-
-
-    
-    # resp = state["query_engine_related_queries"].query(state["refined_query"])
-
-    # raw = getattr(resp, "response", "") or ""
-    # text = str(raw).strip()
-    # logging.info(f'---step---: llm_call_related_queries, {state["refined_query"]}\nResponse:{resp}')
-    
-
-    # # If LLM says "Empty Response" or returns nothing, do not crash
-    # if not text or text.lower().startswith("empty"):
-    #     logging.warning("Related queries: empty response; returning [].")
-    #     return {"related_queries": []}
-
-    # try:
-    #     json_obj = safe_parse_json(text)
-    # except Exception:
-    #     logging.error("Failed to parse related-queries JSON. Raw:\n%s", text, exc_info=True)
-    #     # Fail-soft: keep pipeline alive
-    #     return {"related_queries": []}
-
-    # # Normalize to your schema
-    # related: List[RelatedQuery] = []
-    # for entry in json_obj or []:
-    #     category = (entry.get("Category name") or "").strip()
-    #     for q in entry.get("Related questions", []) or []:
-    #         related.append({"keyword": category, "query": str(q)})
-
-    return {"related_queries": selected_queries}
  
     
 
@@ -331,13 +292,10 @@ def references_generator(state: State_AnswerWithRelatedQueries) -> dict:
 
     return {"references": refs}
 
-
 def aggregator(state: State_AnswerWithRelatedQueries) -> dict:
     writer = get_stream_writer()
     writer({"event": "info", "message": "Ferdigstiller."})
 
-    # Helper to emit a chunk the client can append
-    # (Use a consistent shape so your client knows how to handle it.)
     def emit(delta: str, event: str = "chunk"):
         writer({"event": event, "structured_answer_delta": delta})
 
@@ -345,10 +303,9 @@ def aggregator(state: State_AnswerWithRelatedQueries) -> dict:
     if state["validate_response_result"] == "Rejected":
         feedback = state["feedback"] or "Beklager, jeg fant ikke relevant info."
         emit(feedback + "\n")
-        writer({"event": "done"})  # tell client to stop appending
+        writer({"event": "done"})
         return {"structured_answer": feedback}
 
-    # Otherwise: build + stream in parts
     combined_parts = []
 
     # References (stream each bullet)
@@ -371,19 +328,33 @@ def aggregator(state: State_AnswerWithRelatedQueries) -> dict:
                 line = f"=={q}==\n"
                 combined_parts.append(line); emit(line)
 
-    # Debug / tracking
-    track = []
-
-    # Inline the related categories JSON-ish block
+    # ---- Related categories payload (main first) ----
+    main_cat = state.get("main_category")
     rel = state.get("related_categories") or []
-    track.append(json.dumps(rel, ensure_ascii=False))
-    part = "".join(track)
-    combined_parts.append(part); emit(part, event="Related categories")
 
-    # Signal the end of stream
+    cats: list[str] = []
+    if main_cat:
+        cats.append(str(main_cat))
+
+    # append unique related cats, excluding main if duplicated
+    seen = set(cats)
+    for c in rel:
+        if not c:
+            continue
+        s = str(c)
+        if s not in seen:
+            cats.append(s)
+            seen.add(s)
+
+    # Fallback: if no main and rel empty, send empty array (still valid JSON)
+    categories_payload = json.dumps(cats, ensure_ascii=False)
+
+    # Emit ONLY the JSON array in the special event the client listens for
+    emit(categories_payload, event="Related categories")
+
+    # Finish stream
     writer({"event": "done"})
 
-    # Return the full text to keep it in state
     combined = "".join(combined_parts)
     return {"structured_answer": combined}
 
@@ -394,14 +365,12 @@ builder = StateGraph(State_AnswerWithRelatedQueries)
 
 # 1️⃣ Core answer + validation
 builder.add_node("llm_call_answer", llm_call_answer)
-builder.add_node("llm_call_refine_query", llm_call_refine_query)
-builder.add_node("llm_call_severity_and_category", llm_call_severity_and_category)
 builder.add_node("validate_response", validate_response)
+builder.add_node("llm_refine_and_classify", llm_refine_and_classify)
 
-builder.add_edge(START, "llm_call_refine_query")
-builder.add_edge("llm_call_refine_query", "llm_call_answer")
+builder.add_edge(START, "llm_refine_and_classify")
+builder.add_edge("llm_refine_and_classify", "llm_call_answer")
 builder.add_edge("llm_call_answer", "validate_response")
-builder.add_edge("validate_response", "llm_call_severity_and_category")
 
 
 # 2️⃣ Branch on validation result:
@@ -438,7 +407,7 @@ builder.add_edge("aggregator", END)
 answer_with_related_queries_workflow = builder.compile()
 
 # produce graph.mmd that visualizes the workflow
-#from graph_utils import save_mermaid_diagram
-#save_mermaid_diagram(answer_with_related_queries_workflow.get_graph())
+from graph_utils import save_mermaid_diagram
+save_mermaid_diagram(answer_with_related_queries_workflow.get_graph())
 
 logging.info("answer_witth_related_queries_workflow created...")
