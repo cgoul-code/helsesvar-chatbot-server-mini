@@ -225,6 +225,9 @@ async def get_answer_with_related_queries_as_stream(
     vector_store: VectorIndexStore
 ):
     print('------------->>get_answer_with_related_queries')
+    related_only = query_settings.related_only
+    main_category = query_settings.main_category
+    query_severity = query_settings.query_severity
     # 1) Try to load the requested index
     vec_name = query_settings.vectorIndex
     entry = vector_store.get(vec_name)
@@ -314,17 +317,7 @@ async def get_answer_with_related_queries_as_stream(
     text_rq_template = ChatPromptTemplate([
         ChatMessage(
             role=MessageRole.SYSTEM,
-            content=(
-                # "You will be provided with a user query.\n"
-                # "From the user query, find 5 queries that kan be related to the user query"
-                # "Output requirements:\n"
-                # "- Return JSON ONLY. No explanations. No markdown. No code fences.\n"
-                # "- Use double quotes for all keys and strings.\n"
-                # "- Do not include trailing commas.\n"
-                # "- Keep information of the context for from the initial user query, an example: if the user query concerns the sharing of nude images, and a relevant query is about penalties, the relevant question should address penalties for sharing nude images.\n"
-                # "- Shape:\n"
-                # '[{"Category name": "category","Related questions":["question1","question2"]}, ...]\n'
-                
+            content=(                
                 "You will receive a user query and a list of CANDIDATE QUERIES, each with a unique 'id' and a 'text'.\n"
                 "Your task is to select the most relevant candidate queries to the user query. IMPORTANT RULES:\n"
                 "1) DO NOT REWRITE OR EDIT ANY CANDIDATE TEXT.\n"
@@ -387,13 +380,21 @@ async def get_answer_with_related_queries_as_stream(
 
     # 5) Initialize and run your optimizer workflow
     init_state: State_AnswerWithRelatedQueries = {
+        "related_only" : query_settings.related_only,
+        "main_category": query_settings.main_category,
+        "query_severity": query_settings.query_severity,
+        "index" : index,
+        "index_related_queries" : index_qa_bank,
         "llm": server_settings.llm,
         "query_engine": query_engine,
         "query_engine_related_queries": query_engine_related_queries,
         "retriever_related_queries": retriever_related_queries,
         "vector_index_description": vector_index_description,
         "query": query_settings.user_content,
+        "refined_query": query_settings.refined_query,
+        "main_category": query_settings.main_category,
         "similarity_cutoff": query_settings.similarity_cutoff,
+        "similarity_top_k": query_settings.similarity_top_k,
         "relevancy_cutoff" : query_settings.relevancy_cutoff,
         "categories": categories,
         # defaults:
