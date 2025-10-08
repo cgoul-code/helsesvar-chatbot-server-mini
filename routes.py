@@ -49,6 +49,7 @@ def register_routes(app):
             logging.info("Received /chat payload: %r", payload)
 
             query_settings = get_query_settings(payload)
+            
             agent_name = getattr(query_settings, "agent", None)
             agent_fn = AGENT_REGISTRY.get(agent_name)
             if agent_fn is None:
@@ -91,7 +92,7 @@ def register_routes(app):
                 except Exception as e:
                     # send an error event before closing
                     err = {"error": str(e)}
-                    yield _format_sse(json.dumps({"event":"error", **err}, ensure_asciwi=False))
+                    yield _format_sse(json.dumps({"event":"error", **err}, ensure_ascii=False))
                 finally:
                     # signal completion
                     yield _format_sse(json.dumps({"event": "done"}, ensure_ascii=False))
@@ -109,3 +110,5 @@ def register_routes(app):
             logging.error("Error in /chat handler", exc_info=True)
             status = getattr(e, "code", 500)
             return {"error": str(e)}, status
+        
+        

@@ -12,6 +12,10 @@ class QuerySettings:
         self.vectorIndex = kwargs.get('vectorIndex', "None")
         self.user_content = kwargs.get('user_content', "")
         self.agent = kwargs.get('agent', "structured")
+        self.related_only = kwargs.get('related_only', False)  
+        self.main_category  = kwargs.get('main_category', "")  
+        self.query_severity  = kwargs.get('query_severity', "")  
+        self.refined_query = kwargs.get('refined_query', "")  
 
     def __str__(self):
         # Convert object properties to a JSON string
@@ -25,7 +29,12 @@ def get_query_settings(json_request):
         similarity_cutoff=json_request.get('similarity_cutoff', 0.45),
         relevancy_cutoff=json_request.get('relevancy_cutoff', 0.45),
         vectorIndex=json_request.get('vectorIndex', "helsenorgeartikler"),
-        agent = json_request.get('agent', "structured")
+        agent = json_request.get('agent', "structured"),
+        related_only = json_request.get('related_only', False),  
+        main_category = json_request.get('main_category', ""),  
+        query_severity = json_request.get('query_severity', "") , 
+        refined_query = json_request.get('refined_query', "")
+
     )
     
     # Messages extraction - more Pythonic way to handle potential missing data
