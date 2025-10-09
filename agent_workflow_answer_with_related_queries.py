@@ -417,24 +417,25 @@ def aggregator(state: State_AnswerWithRelatedQueries) -> dict:
     if rfq:
          emit(json.dumps(rfq, ensure_ascii=False), event="Refined query")
         
-    if state.get("related_only"):
+ 
         
-        rq = (state.get("related_queries") or [])[:5]
-        emit(json.dumps(rq, ensure_ascii=False), event="Related queries")
+    rq = (state.get("related_queries") or [])[:5]
+    emit(json.dumps(rq, ensure_ascii=False), event="Related queries")
 
-        main_cat = state.get("main_category")
-        rel = state.get("related_categories") or []
-        cats: list[str] = []
-        if main_cat:
-            cats.append(str(main_cat))
-        seen = set(cats)
-        for c in rel:
-            if not c: continue
-            s = str(c)
-            if s not in seen:
-                cats.append(s); seen.add(s)
-        emit(json.dumps(cats, ensure_ascii=False), event="Related categories")
-
+    main_cat = state.get("main_category")
+    emit(json.dumps(main_cat, ensure_ascii=False), event="Maincategory")
+    
+    rel = state.get("related_categories") or []
+    cats: list[str] = []
+    seen = set(cats)
+    for c in rel:
+        if not c: continue
+        s = str(c)
+        if s not in seen:
+            cats.append(s); seen.add(s)
+    emit(json.dumps(cats, ensure_ascii=False), event="Subcategories")
+    
+    if state.get("related_only"):
         writer({"event": "done"})
         return {"structured_answer": ""}
 
@@ -471,30 +472,6 @@ def aggregator(state: State_AnswerWithRelatedQueries) -> dict:
     # Emit ONLY the JSON array (client listens for this event)
     emit(related_queries_payload, event="Related queries")
 
-    # ---- Related categories payload (main first) ----
-    main_cat = state.get("main_category")
-    rel = state.get("related_categories") or []
-
-    cats: list[str] = []
-    if main_cat:
-        cats.append(str(main_cat))
-
-    # append unique related cats, excluding main if duplicated
-    seen = set(cats)
-    for c in rel:
-        if not c:
-            continue
-        s = str(c)
-        if s not in seen:
-            cats.append(s)
-            seen.add(s)
-
-    # Fallback: if no main and rel empty, send empty array (still valid JSON)
-    categories_payload = json.dumps(cats, ensure_ascii=False)
-
-    # Emit ONLY the JSON array in the special event the client listens for
-    emit(categories_payload, event="Related categories")
-
     # Finish stream
     writer({"event": "done"})
 
@@ -516,7 +493,6 @@ builder.add_node("llm_call_related_queries", llm_call_related_queries)
 builder.add_node("ensure_related_only_defaults", ensure_related_only_defaults) 
 
 def _mode_router(s: State_AnswerWithRelatedQueries) -> str:
-    print(">>>>>>>>>>state:",s.get("related_only"))
     return "related_only" if s.get("related_only") else "full"
 
 builder.add_conditional_edges(
