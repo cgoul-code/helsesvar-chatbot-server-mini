@@ -68,14 +68,27 @@ def _get_related_category_names(categories, name: str):
 
 def _classify_relevancy(score: float, thresholds: dict[str, float]) -> str:
     """
-    thresholds: dict with descending levels. Example:
-      {"strong": 0.60, "medium": 0.45, "weak": 0.35}
-    returns one of: "Strong", "Medium", "Weak", "Rejected"
+    thresholds: dict with descending levels, e.g.
+        {"strong": 0.60, "medium": 0.45, "weak": 0.35}
+    Returns one of: "Strong", "Medium", "Weak", "Rejected".
     """
     s = float(score)
-    if s >= thresholds.get("strong", 0.60): return "Strong"
-    if s >= thresholds.get("medium", 0.45): return "Medium"
-    if s >= thresholds.get("weak", 0.35):   return "Rejected"
+
+    # Defaults if a key is missing
+    strong = float(thresholds.get("strong", 0.60))
+    medium = float(thresholds.get("medium", 0.50))
+    weak   = float(thresholds.get("weak",   0.35))
+
+    # Ensure ordering (desc). If someone passed bad values, sort them.
+    # After this, strong >= medium >= weak.
+    strong, medium, weak = sorted([strong, medium, weak], reverse=True)
+
+    if s >= strong:
+        return "Strong"
+    if s >= medium:
+        return "Medium"
+    if s >= weak:
+        return "Rejected"
     return "Rejected"
 
 
@@ -160,7 +173,7 @@ def build_related_queries_retriever(index_qa_bank, *, top_k, cutoff, query_sever
 
     composite = MetadataFilters(filters=filters_list, condition="and")
     
-    print("composite:", composite)
+    #print("composite:", composite)
 
     return index_qa_bank.as_retriever(
         similarity_top_k=top_k,
@@ -170,7 +183,6 @@ def build_related_queries_retriever(index_qa_bank, *, top_k, cutoff, query_sever
 
 def ensure_related_only_defaults(state: State_AnswerWithRelatedQueries) -> dict:
     """When related_only=True, make sure required fields exist without running answer/validation."""
-    print(">>>>>>>>>>>>>>>ensure_related_only_defaults main cat", state.get("main_category"))
     writer = get_stream_writer()
     def emit(delta: str, event: str = "chunk"):
         writer({"event": event, "structured_answer_delta": delta})
@@ -184,7 +196,7 @@ def ensure_related_only_defaults(state: State_AnswerWithRelatedQueries) -> dict:
             query_severity=state.get("query_severity"),      # may be None → defaults to all
             main_category=state.get("main_category"),        # may be None → ignored
         )
-        print(state["refined_query"])
+
         results = retriever.retrieve(state["refined_query"])
 
         if results:
@@ -315,7 +327,7 @@ def validate_response(state: State_AnswerWithRelatedQueries) -> dict:
 
     thresholds = state.get("relevancy_thresholds", {
         "strong": 0.60,
-        "medium": 0.45,   # anything below = Rejected
+        "medium": 0.50,   # anything below = Rejected
         "weak":   0.35,   # anything below = Rejected
     })
 
@@ -336,6 +348,7 @@ def validate_response(state: State_AnswerWithRelatedQueries) -> dict:
         #print(f'score:{n.score}')
         
     print(f'best score:{best.score}')
+ 
 
     band = _classify_relevancy(best.score, thresholds)
 
@@ -373,7 +386,6 @@ def validate_response(state: State_AnswerWithRelatedQueries) -> dict:
 
 
 def on_reject_build_structured(state: State_AnswerWithRelatedQueries) -> dict:
-    print("rejected")
     # exactly what aggregator does:
     return aggregator(state)
 
@@ -410,7 +422,7 @@ def aggregator(state: State_AnswerWithRelatedQueries) -> dict:
     writer({"event": "info", "message": "Ferdigstiller."})
 
     def emit(delta: str, event: str = "chunk"):
-        print({"event": event, "structured_answer_delta": delta})
+        #print({"event": event, "structured_answer_delta": delta})
         writer({"event": event, "structured_answer_delta": delta})
         
     rfq = state.get("refined_query") 
@@ -472,10 +484,17 @@ def aggregator(state: State_AnswerWithRelatedQueries) -> dict:
     # Emit ONLY the JSON array (client listens for this event)
     emit(related_queries_payload, event="Related queries")
 
+    
+    # emit system info
+    best_score = state["best_node_score"]
+    writer({"event": "systeminfo", "message": f"best score:{best_score: .2f}%"})
+    
     # Finish stream
     writer({"event": "done"})
 
     combined = "".join(combined_parts)
+    
+    
     return {"structured_answer": combined}
 
 
