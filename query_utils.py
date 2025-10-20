@@ -15,7 +15,7 @@ class QuerySettings:
         self.related_only = kwargs.get('related_only', False)  
         self.main_category  = kwargs.get('main_category', "")  
         self.query_severity  = kwargs.get('query_severity', "")  
-        self.refined_query = kwargs.get('refined_query', "")  
+        self.query = kwargs.get('query', "")  
 
     def __str__(self):
         # Convert object properties to a JSON string
@@ -33,7 +33,7 @@ def get_query_settings(json_request):
         related_only = json_request.get('related_only', False),  
         main_category = json_request.get('main_category', ""),  
         query_severity = json_request.get('query_severity', "") , 
-        refined_query = json_request.get('refined_query', "")
+        query = json_request.get('query', "")
 
     )
     
