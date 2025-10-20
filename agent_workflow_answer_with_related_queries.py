@@ -364,65 +364,80 @@ def synthesizer(state: State_AnswerWithRelatedQueries):
     sq: list[SubQuery] = state["subqueries"]
     
     completed_report_answers=""
-    for s in sq:
-        combined = f"Subquery: {s.subquery}\n\n"
-        combined += f"\nAnswer: {s.answer}\n\n"
-        # if s.references:
-        #     combined += "## Referanser\n"
-        #     for r in s.references:
-        #         combined += f"- [{r['name']}]({r['url']}) , relevans: {r['relevancy_index']:.2f}\n"
-        completed_report_answers += combined  
+    completed_report_answers_non_valid=""
     
-    #print(f'completed_report: {completed_report_answers}')
-
-    aggregated_answer = llm.invoke(
-        [
-            SystemMessage(
-                content=(
-                    "from this list of answers, reorganize a final answer. Use markdown formatting.\n"
-                    "STYLE RULES (must follow):\n"
-                    "- Start directly with the answer. No preamble, no meta-text.\n"
-                    "- Do NOT restate the question.\n"
-                    "- Do NOT include the words “Subquery”, “Sub-query”, or any heading that begins with them.\n"
-                    "- Do NOT include phrases like \“Here is…\”, \“Her er…\”, \“Below is…\”, \“Svar på spørsmålet ditt…\”, \"Kort oppsummering\".\n"
-                    "- Use concise headings only if they add value (e.g., \“Kort oppsummering\”, \“Praktiske trinn\”).\n"
-                    "- Output must be helpful, empathetic, youth-friendly, and in Norwegian Bokmål.\n"
-                    "IF VIOLATED: Prefer omitting the section entirely rather than adding boilerplate.\n"
-                )
-            ),
-            HumanMessage( 
-                content=f"Here is the list of answers: {completed_report_answers}"
-            ),
-        ]
-    )
-    
-    # build the most relavant references
-    #
-    ref_list =[]
     for s in sq:
-        if s.references and s.response_validity == "valid":
-            #combined += "\n## Referanser\n"
-            for r in s.references:
-                ref_list.append(r)
-                
-   ## keep best score per URL
-    best_by_url = {}
-    for r in ref_list:
-        url = r.get("url") if isinstance(r, dict) else getattr(r, "url", None)
-        score = r.get("relevancy_index") if isinstance(r, dict) else getattr(r, "relevancy_index", None)
-        if url is None or score is None:
-            continue  # skip malformed rows
+        if s.response_validity == 'valid':
+            combined = f"Subquery: {s.subquery}\n\n"
+            combined += f"\nAnswer: {s.answer}\n\n"
+            # if s.references:
+            #     combined += "## Referanser\n"
+            #     for r in s.references:
+            #         combined += f"- [{r['name']}]({r['url']}) , relevans: {r['relevancy_index']:.2f}\n"
+            completed_report_answers += combined  
+        else:
+            completed_report_answers_non_valid+=f'\n\nBeklager, men jeg kunne ikke svare på spørsmålet : \"{s.subquery}\"'
+            
+    
+    print(f'completed_report: <<{completed_report_answers}>>')
 
-        # keep the highest score per URL
-        if (url not in best_by_url) or (score > best_by_url[url]["relevancy_index"]):
-            best_by_url[url] = r
+    if completed_report_answers:
+        aggregated_answer = llm.invoke(
+            [
+                SystemMessage(
+                    content=(
+                        "from this list of subqueries and answers, reorganize a final answer. Use markdown formatting.\n"
+                        "STYLE RULES (must follow):\n"
+                        "- Start directly with the answer. No preamble, no meta-text.\n"
+                        "- Do NOT restate the question.\n"
+                        "- Do NOT include the words “Subquery”, “Sub-query”, or any heading that begins with them.\n"
+                        "- Do NOT include phrases like \“Here is…\”, \“Her er…\”, \“Below is…\”, \“Svar på spørsmålet ditt…\”, \"Kort oppsummering\".\n"
+                        "- Use concise headings expressing the query, only if they add value (e.g., \“Svar på spørsmål om <subquery>\””).\n"
+                        "- Output must be helpful, empathetic, youth-friendly, and in Norwegian Bokmål.\n"
+                        "IF VIOLATED: Prefer omitting the section entirely rather than adding boilerplate.\n"
+                    )
+                ),
+                HumanMessage( 
+                    content=f"Here is the list of answers: {completed_report_answers}"
+                ),
+            ]
+        )
+  
+        
+        logging.info(f"Here is the list of answers: {completed_report_answers}")
+        
+        # build the most relavant references
+        #
+        ref_list =[]
+        for s in sq:
+            if s.references and s.response_validity == "valid":
+                #combined += "\n## Referanser\n"
+                for r in s.references:
+                    ref_list.append(r)
+                    
+    ## keep best score per URL
+        best_by_url = {}
+        for r in ref_list:
+            url = r.get("url") if isinstance(r, dict) else getattr(r, "url", None)
+            score = r.get("relevancy_index") if isinstance(r, dict) else getattr(r, "relevancy_index", None)
+            if url is None or score is None:
+                continue  # skip malformed rows
 
-    ## take the 5 highest by relevancy_index
-    top5 = heapq.nlargest(5, best_by_url.values(), key=lambda x: x["relevancy_index"])
-      
-    return {"final_answer": aggregated_answer.content,
+            # keep the highest score per URL
+            if (url not in best_by_url) or (score > best_by_url[url]["relevancy_index"]):
+                best_by_url[url] = r
+
+        ## take the 5 highest by relevancy_index
+        top5 = heapq.nlargest(5, best_by_url.values(), key=lambda x: x["relevancy_index"])
+        return {"final_answer": aggregated_answer.content + completed_report_answers_non_valid,
             "references": top5,
             }
+    else:
+        return {"final_answer": "Jeg beklager, men jeg kan bare svare på spørsmål basert på den gitte konteksten",
+            "references": [],
+            }
+      
+ 
 
 def emit_query_answer_references(state: State_AnswerWithRelatedQueries):
     
@@ -517,7 +532,7 @@ builder.add_edge("related_queries_and_categories", END)
 answer_with_related_queries_workflow = builder.compile()
 
 from graph_utils import save_mermaid_diagram
-save_mermaid_diagram(answer_with_related_queries_workflow.get_graph())
+#save_mermaid_diagram(answer_with_related_queries_workflow.get_graph())
 
 
 
