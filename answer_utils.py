@@ -390,7 +390,6 @@ async def get_answer_with_related_queries_as_stream(
         "retriever_related_queries": retriever_related_queries,
         "vector_index_description": vector_index_description,
         "query": query_settings.user_content,
-        "refined_query": query_settings.refined_query,
         "main_category": query_settings.main_category,
         "similarity_cutoff": query_settings.similarity_cutoff,
         "similarity_top_k": query_settings.similarity_top_k,
@@ -406,6 +405,8 @@ async def get_answer_with_related_queries_as_stream(
         "references": [],
         "structured_answer": "",
     }
+    print(f'init_state: {init_state}')
+
 
     # ✅ This is  an **async generator**
     async for chunk in answer_with_related_queries_workflow.astream(init_state, stream_mode="custom"):
