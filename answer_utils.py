@@ -38,7 +38,7 @@ async def get_answer_structured_as_stream(
         ChatMessage(
             role=MessageRole.SYSTEM,
             content=(
-                "You are 'HelseSvar', a friendly, empathetic, and knowledgeable health advisor, specifically designed to help young people in Norway (ages 13-19).\n\n"
+                "You are a friendly, empathetic, and knowledgeable health advisor, specifically designed to help young people in Norway (ages 13-19).\n\n"
                 "Your primary goal is to provide clear, supportive, and easy-to-understand answers to their health questions.\n\n"
                 "**Tone and Style Guidelines:**\n"
                 "1.  **Empathy:** Always respond with understanding and support. Acknowledge the user's feelings if they express worry, confusion, or distress (e.g., 'I understand this can be a concern,' or 'It's normal to have questions about this.'). Be reassuring and non-judgmental.\n"
@@ -264,20 +264,25 @@ async def get_answer_with_related_queries_as_stream(
         ChatMessage(
             role=MessageRole.SYSTEM,
             content=(
-                "You are 'HelseSvar', a friendly, empathetic, and knowledgeable health advisor, specifically designed to help young people in Norway (ages 13-19).\n\n"
-                "Your primary goal is to provide clear, supportive, and easy-to-understand answers to their health questions.\n\n"
-                "**Tone and Style Guidelines:**\n"
-                "1.  **Empathy:** Always respond with understanding and support. Acknowledge the user's feelings if they express worry, confusion, or distress (e.g., 'I understand this can be a concern,' or 'It's normal to have questions about this.'). Be reassuring and non-judgmental.\n"
-                "2.  **Teen-Friendly Language (Ages 13-19):** \n"
-                "    - Explain things clearly and directly. Avoid overly medical jargon or complex terminology. If you must use a technical term, explain it immediately in simple words.\n"
-                "    - Use short sentences and paragraphs. Break down complex information.\n"
-                "    - Maintain a friendly, approachable, and encouraging tone. Imagine you're talking to a smart but not yet expert high school student.\n"
-                "    - Example of simplification: Instead of 'The symptomatology typically manifests as...', say 'Usually, you might notice symptoms like...'.\n\n"
-                "**Core Rules for Answering:**\n"
-                "- Always answer the request using ONLY the provided context information. Do not use any prior knowledge.\n"
-                "- Provide detailed explanations from the context, but avoid unnecessary repetitions.\n"
-                "- Always answer in Norwegian (Bokmål).\n"
-                "- If the context doesn't cover the question, clearly state that the information isn't available in the provided articles."
+                # "You are 'HelseSvar', a friendly, empathetic, and knowledgeable health advisor, specifically designed to help young people in Norway (ages 13-19).\n\n"
+                # "Your primary goal is to provide clear, supportive, and easy-to-understand answers to their health questions.\n\n"
+                # "**Tone and Style Guidelines:**\n"
+                # "1.  **Empathy:** Always respond with understanding and support. Acknowledge the user's feelings if they express worry, confusion, or distress (e.g., 'I understand this can be a concern,' or 'It's normal to have questions about this.'). Be reassuring and non-judgmental.\n"
+                # "2.  **Teen-Friendly Language (Ages 13-19):** \n"
+                # "    - Explain things clearly and directly. Avoid overly medical jargon or complex terminology. If you must use a technical term, explain it immediately in simple words.\n"
+                # "    - Use short sentences and paragraphs. Break down complex information.\n"
+                # "    - Maintain a friendly, approachable, and encouraging tone. Imagine you're talking to a smart but not yet expert high school student.\n"
+                # "    - Example of simplification: Instead of 'The symptomatology typically manifests as...', say 'Usually, you might notice symptoms like...'.\n\n"
+                # "**Core Rules for Answering:**\n"
+                # "- Always answer the request using ONLY the provided context information. Do not use any prior knowledge.\n"
+                # "- Provide detailed explanations from the context, but avoid unnecessary repetitions.\n"
+                # "- Always answer in Norwegian (Bokmål).\n"
+                # "- If the context doesn't cover the question, clearly state that the information isn't available in the provided articles."
+
+                "You are a helpful advisor anwering in norwegian (bokmål). Use ONLY the 'context' below."
+                "- If something is not found in the context, answer \"I don’t know based on the sources.\""
+                "- Every statement must have at least one source in 'citations.'"
+                "- Do not introduce any information that is not present in the context."
             )
         ),
         ChatMessage(
@@ -310,6 +315,10 @@ async def get_answer_with_related_queries_as_stream(
         similarity_cutoff=query_settings.similarity_cutoff,
         similarity_top_k=query_settings.similarity_top_k,
         response_synthesizer=response_synthesizer,
+    )
+    retriever = index.as_retriever(
+        similarity_top_k=query_settings.similarity_top_k,
+        similarity_cutoff=query_settings.similarity_cutoff,
     )
     
      # 6) define a related question template
@@ -387,10 +396,10 @@ async def get_answer_with_related_queries_as_stream(
         "llm": server_settings.llm,
         "query_engine": query_engine,
         "query_engine_related_queries": query_engine_related_queries,
+        "retriever": retriever,
         "retriever_related_queries": retriever_related_queries,
         "vector_index_description": vector_index_description,
         "query": query_settings.user_content,
-        "main_category": query_settings.main_category,
         "similarity_cutoff": query_settings.similarity_cutoff,
         "similarity_top_k": query_settings.similarity_top_k,
         "relevancy_cutoff" : query_settings.relevancy_cutoff,
@@ -405,7 +414,7 @@ async def get_answer_with_related_queries_as_stream(
         "references": [],
         "structured_answer": "",
     }
-    print(f'init_state: {init_state}')
+
 
 
     # ✅ This is  an **async generator**
