@@ -6,7 +6,7 @@ config:
 graph TD;
 	__start__([<p>__start__</p>]):::first
 	orchestrator(orchestrator)
-	llm_call(llm_call)
+	query_grounded(query_grounded)
 	synthesizer(synthesizer)
 	emit_query_answer_references(emit_query_answer_references)
 	related_queries_and_categories(related_queries_and_categories)
@@ -14,8 +14,8 @@ graph TD;
 	__start__ -. &nbsp;full&nbsp; .-> orchestrator;
 	__start__ -. &nbsp;related_only&nbsp; .-> related_queries_and_categories;
 	emit_query_answer_references --> related_queries_and_categories;
-	llm_call --> synthesizer;
-	orchestrator -.-> llm_call;
+	orchestrator -.-> query_grounded;
+	query_grounded --> synthesizer;
 	synthesizer --> emit_query_answer_references;
 	related_queries_and_categories --> __end__;
 	classDef default fill:#f2f0ff,line-height:1.2

@@ -3,11 +3,14 @@ import re
 import logging
 import heapq
 import json
-from typing import List, Literal
+import unicodedata
+
 from typing_extensions import TypedDict
 from pydantic import BaseModel, Field
 
 from typing import List, Literal, Dict, Any, Optional
+import numpy as np
+import textwrap
 
 from llama_index.core.base.response.schema import Response
 from llama_index.core.query_engine import BaseQueryEngine
@@ -18,15 +21,95 @@ from langgraph.graph import StateGraph, START, END
 from langgraph.config import get_stream_writer
 from langchain_core.messages import HumanMessage, SystemMessage
 from langgraph.constants import Send
+from rapidfuzz.fuzz import partial_ratio
+
+from sklearn.feature_extraction.text import TfidfVectorizer
+from sklearn.metrics.pairwise import cosine_similarity
 
 from llama_index.core.vector_stores import MetadataFilter, MetadataFilters, FilterOperator
+from langchain_core.prompts import PromptTemplate
+from langchain_core.runnables import RunnableLambda
 
 from registry import classify_and_subqueries_prompt
+
+GROUNDED_PROMPT = PromptTemplate.from_template(
+    """You are a helpful advisor and must respond in Norwegian (Bokmål).
+    You MUST follow the rules below exactly.
+
+    IMPORTANT PRINCIPLES:
+    - You may ONLY use information from the 'context' (below). Do not add explanations, numbers, reasons, or advice that are not explicitly stated in the context.
+    - Do not include any additional advice, opinions, or suggestions that are not explicitly present in the context.
+
+    OUTPUT REQUIREMENTS:
+    You MUST return valid JSON matching the Pydantic schema 'GroundedAnswer':
+    {{
+    "answer": str,
+    "claims": List[str],
+    "citations": [{{"doc_id": str, "quote": str}}]
+    }}
+
+    DEFINITIONS:
+    - "answer":
+    A coherent answer to the question, written in a friendly and clear manner, but ONLY based on the context.
+    Do not include any information that is not directly found in the context.
+
+    - "claims":
+    A list of short, individual statements extracted from "answer".
+    Each claim must be ONE clear sentence.
+    Each claim MUST be directly supported by at least one quote in "citations".
+    Do not combine multiple ideas from different parts of the context into one claim.
+    Do not include anything that cannot be quoted verbatim from the context.
+
+    - "citations":
+    A list of evidence supporting the claims.
+    For every "claim" in "claims", there must be at least one "citation".
+    Each "citation" MUST include:
+        - "doc_id": exactly the ID shown in brackets in the context, e.g. [https://ung.no/article] → "https://ung.no/article"
+        - "quote": a VERBATIM text string (at least 8 characters long) copied directly from the context.
+
+    VERY IMPORTANT:
+        * Do not paraphrase the quote.
+        * Do not add or remove words.
+        * Do not merge two different parts using "..." to make it fit.
+        * Do not change the word order.
+        * Do not shorten a sentence into something that doesn’t exist as continuous text in the context.
+
+    If you cannot find a verbatim "citation" in the context that supports a "claim", then that "claim" must NOT appear in "claims", and the information must NOT appear in the "answer" either.
+
+    DO NOT:
+    - Do not ask for more information.
+    - Do not tell the user what to do, unless it is explicitly stated in the context.
+    - Do not mention these instructions in your answer.
+
+    QUESTION:
+    {question}
+
+    CONTEXT (SOURCES):
+    Each source is labeled with an ID in brackets. Use it exactly as the doc_id.
+    Only quote from these sources:
+
+    {context}
+    """
+)
+
+
+
 
 class Reference(TypedDict):
     name: str
     url: str
     relevancy_index: float   
+    
+# 1) Schema with required citations (doc_id + quote or span)
+class Citation(BaseModel):
+    doc_id: str
+    quote: str = Field(..., min_length=8)
+
+class GroundedAnswer(BaseModel):
+    answer: str
+    claims: List[str]
+    citations: List[Citation]
+    
 
 # Schema for structured output to use in planning
 class SubQuery(BaseModel):
@@ -40,6 +123,8 @@ class SubQuery(BaseModel):
         description="list of references",
     )
     response_validity: Literal["valid", "not valid"]
+    
+    response_validity_index : float
 
 
 class SubQueries(BaseModel):
@@ -65,6 +150,7 @@ class State_AnswerWithRelatedQueries(TypedDict):
     index_related_queries: VectorStoreIndex
     query_engine: BaseQueryEngine
     query_engine_related_queries: BaseQueryEngine
+    retriever: BaseRetriever
     retriever_related_queries: BaseRetriever
     vector_index_description: str
     main_category: str
@@ -88,22 +174,208 @@ class State_AnswerWithRelatedQueries(TypedDict):
     
     subqueries: list[SubQuery]  # List of subqueries
     final_answer: str  # Final report
+    
+_POSSIBLE_META_IDS = ("doc_id", "from_doc_id", "document_id", "source_id", "file_id", "url")
 
 
+def _collect_ids(node) -> list[str]:
+    meta = getattr(node, "metadata", {}) or {}
+    ids = [str(meta[k]) for k in _POSSIBLE_META_IDS if meta.get(k)]
+    # include chunk id as a fallback
+    chunk_id = getattr(node, "id_", None) or getattr(node, "node_id", None)
+    if chunk_id:
+        ids.append(str(chunk_id))
+    return list(dict.fromkeys(ids))
 
-def _get_field(o, k, default=None):
-    return o.get(k, default) if isinstance(o, dict) else getattr(o, k, default)
+def _preferred_display_id(node) -> str:
+    ids = _collect_ids(node)
+    return ids[0] if ids else "unknown"
+
+def _norm_ws(s: str) -> str:
+    return re.sub(r"\s+", " ", (s or "")).strip()
+    
+def _node_id(n):
+    # Prefer your own doc_id if present
+    md = getattr(n, "metadata", {}) or {}
+    return str(md.get("doc_id") or getattr(n, "id_", "unknown"))
+
+def _node_text(n):
+    # Works across TextNode/Document variants
+    t = getattr(n, "text", None)
+    if t:     
+        return t #usually this one
+    get_content = getattr(n, "get_content", None)
+    if callable(get_content):     
+        return get_content(metadata_mode="all") or ""
+    return getattr(n, "get_text", lambda: "")() or ""
+
+_WS = re.compile(r"\s+")
+_TRANSLATE = str.maketrans({
+    "\u2018": "'",  # ‘
+    "\u2019": "'",  # ’
+    "\u201C": '"',  # “
+    "\u201D": '"',  # ”
+    "\u2013": "-",  # –
+    "\u2014": "-",  # —
+    "\u00A0": " ",  # NBSP
+    "\u202F": " ",  # NNBSP
+})
+_ZERO_WIDTH = dict.fromkeys(map(ord, ["\u200B", "\u200C", "\u200D", "\u2060"]), None)
+
+def _normalize(s: str, *, collapse_ws: bool = True, case_sensitive: bool = False) -> str:
+    if not s:
+        return ""
+    s = unicodedata.normalize("NFKC", s)
+    s = s.translate(_TRANSLATE).translate(_ZERO_WIDTH)
+    if collapse_ws:
+        s = _WS.sub(" ", s)
+    return s if case_sensitive else s.casefold()
+
+def _format_context_from_nodes(nodes, max_chars_per_node=1800, max_nodes=6) -> str:
+    parts = []
+    for nws in nodes[:max_nodes]:
+        node = getattr(nws, "node", nws)
+        did = _preferred_display_id(node)   # <-- was _node_id(node)
+        txt = _node_text(node).strip()
+        if not txt:
+            continue
+        txt = txt[:max_chars_per_node]
+        parts.append(f"[{did}]\n{textwrap.dedent(txt)}")
+    return "\n\n".join(parts)
+
+def _node_identity(n: Any) -> str:
+    """Key for de-duplication while preserving order."""
+    node = getattr(n, "node", n)
+    return str(getattr(node, "id_", None) or getattr(node, "node_id", None) or id(node))
+
+
+# --- main verifier: per-node matching, returns nodes with hits ---
+# returns:
+# problems: list of error strings (empty = all good)
+# matched_nodes: de-duplicated list of nodes that matched at least one citation
+# matches_by_citation: dict mapping citation index → list of nodes that matched that
+#
+def _verify_citations_per_node(
+    citations: List["Citation"],
+    nodes: List[Any],
+    *,
+    min_quote_chars: int = 8,
+    collapse_whitespace: bool = True,
+    case_sensitive: bool = False,
+    # Optional fuzzy fallback: set to an int (e.g., 85) to enable
+    fuzzy_min_ratio: Optional[int] = None,
+) -> Dict[str, Any]:
+    """
+    Check each citation.quote against each node's text (no combined corpus).
+
+    Returns dict:
+      {
+        "problems": List[str],                       # empty == OK
+        "matched_nodes": List[Any],                  # nodes that matched any citation (deduped, order-preserving)
+        "matches_by_citation": Dict[int, List[Any]]  # citation index -> list of matching nodes
+      }
+    """
+    problems: List[str] = []
+    matches_by_citation: Dict[int, List[Any]] = {}
+    matched_nodes_ordered: List[Any] = []
+    seen_nodes: set[str] = set()
+
+    # Pre-normalize node texts once
+    norm_nodes = []
+    for nws in nodes:
+        text_raw = _node_text(nws)
+        text_norm = _normalize(text_raw, collapse_ws=collapse_whitespace, case_sensitive=case_sensitive)
+        norm_nodes.append((nws, text_norm))
+
+    # If no text at all but we have citations
+    if citations and not any(t for _, t in norm_nodes):
+        return {
+            "problems": [f"citation[{i}]: no retrieved text available" for i, _ in enumerate(citations)],
+            "matched_nodes": [],
+            "matches_by_citation": {},
+        }
+
+    # Check each citation against each node
+    for i, cit in enumerate(citations):
+        q_raw = (cit.quote or "").strip()
+        q_len_norm = len(_normalize(q_raw, collapse_ws=True, case_sensitive=True))
+        if q_len_norm < min_quote_chars:
+            problems.append(f"citation[{i}]: quote too short (<{min_quote_chars})")
+            continue
+
+        q_norm = _normalize(q_raw, collapse_ws=collapse_whitespace, case_sensitive=case_sensitive)
+
+        found_in_any = False
+        for node_obj, node_text_norm in norm_nodes:
+            meta = node_obj.metadata
+            url = meta.get('url', 'Ingen URL')
+            if not node_text_norm:
+                continue
+
+            hit = q_norm in node_text_norm
+            if not hit and fuzzy_min_ratio is not None:
+                try:
+                    from rapidfuzz.fuzz import partial_ratio
+                    hit = partial_ratio(q_norm, node_text_norm) >= fuzzy_min_ratio
+                    print(f'------------->partial_ratio founf hit for the citation:{q_norm}<---------------------')
+                except Exception:
+                    hit = False
+
+            if hit:
+                found_in_any = True
+                
+                print(f'¤¤¤Fikk hit for {q_norm} for {url}')
+                matches_by_citation.setdefault(i, []).append(node_obj)
+                key = _node_identity(node_obj)
+                if key not in seen_nodes:
+                    seen_nodes.add(key)
+                    matched_nodes_ordered.append(node_obj)
+
+        if not found_in_any:
+            problems.append(f"citation[{i}]: quote not found in any node: {q_raw!r}")
+            print(f'¤¤¤¤Fikk IKKE hit for {q_norm}')
+
+    return {
+        "problems": problems,
+        "matched_nodes": matched_nodes_ordered,
+        "matches_by_citation": matches_by_citation,
+    }
+    
+# ----------
+
+_SENT_SPLIT = re.compile(r'(?<=[.!?])\s+')
+
+_STOP = set("""
+og i jeg det at en et den til er som på de med han av ikke for å var meg seg vi dere
+oss din ditt deres dem da hun nå har om sin sitt sine også hadde hva skal selv mot dette
+min mitt mine alle denne disse noen noe hver hvem vil bli ble blitt kunne må måtte innen
+uten under over etter før mellom gjennom rundt fordi hvis mens når hvor hvorfor slik der
+her hit dit opp ned ut inn igjen videre bare mye mange annen andre flere slik slik
+fram tilbake alltid aldri kanskje allerede derfor enten eller både men så veldig ganske
+hele helt noe nok samme noen gang ganger vår vårt våre hos blant innenfor utenfor ovenfor
+nedenfor bak foran ved omkring utover innenfor innen utenfor uten gjennom imot tross selv
+selv om deres dens deres hans hennes dens dens deres disse denne dette der den det de
+dette disse vår vårt våre kunne skulle burde måtte være vært ble blir blitt gjør gjorde
+gjort gjør gjørte gjortes hadde hatt har skal kan vil må bør får få fikk gi gitt sier sa
+sagt ser så sånn slik at på i til av med om for fra mot gjennom blant ved mellom uten
+oppe nede inne ute her der hit dit hvor når hvorfor hvem hvilken hvilket hvilke hvordan
+hver alle alt annet andre noen noe ingen intet begge både hverken eller dersom fordi mens
+når siden som hva hvor hvem hvilken hvilket hvilke hvorvidt hvorfor hvordan
+""".split())
+
     
 # Worker state
 class WorkerState(TypedDict):
     subquery: SubQuery
     similarity_cutoff: float
     query_engine: BaseQueryEngine
+    retriever: BaseRetriever
+    llm: Any
     
 def _emit(delta: str, event: str = "Answer"):
     writer = get_stream_writer()  
     writer({"event": event, "structured_answer_delta": delta})
-    logging.info({"event": event, "structured_answer_delta": delta})
+    #logging.info({"event": event, "structured_answer_delta": delta})
     
 def _classify_relevancy(score: float, thresholds: dict[str, float]) -> str:
     """
@@ -249,9 +521,7 @@ def llm_call(state: WorkerState):
         vector_index_desc = state["vector_index_description"]
         feedback = (f"Jeg beklager! {vector_index_desc}. "
                     f"Hvis du har spørsmål om disse emnene, kan jeg prøve å hjelpe.")
-        return {
-
-        }
+        return {}
     best = max(nodes, key=lambda n: n.score)
     
     band = _classify_relevancy(best.score, thresholds)
@@ -266,6 +536,7 @@ def llm_call(state: WorkerState):
                 "url": meta.get('url', 'Ingen URL'),
                 "relevancy_index": node.score
             })
+    state['subquery'].response_validity_index = best.score
     if (band != "Rejected"):
         state['subquery'].response_validity = "valid"
         state['subquery'].references = refs
@@ -273,13 +544,98 @@ def llm_call(state: WorkerState):
     else: 
         state['subquery'].response_validity = "not valid"
         state['subquery'].answer = "Jeg beklager, men jeg kan bare svare på spørsmål basert på den gitte konteksten"
+
         
     return {}
+
+def query_grounded(state: WorkerState) -> dict:
+    writer = get_stream_writer()
+    writer({"event": "info", "message": f"Worker answers the subquery \"{state['subquery'].subquery}\""})
+
+    try:
+        #qe = state["query_engine"]
+        retriever = state["retriever"]
+        question = state["subquery"].subquery
+
+        # Retrieve
+        #resp = qe.query(question)
+        
+        #nodes = getattr(resp, "source_nodes", []) or []
+        nodes = retriever.retrieve(question) or []
+
+        # Build grounded context and get structured output
+        ctx = _format_context_from_nodes(nodes)
+        
+        chain = (
+            RunnableLambda(lambda _: {"question": question, "context": ctx})
+            | GROUNDED_PROMPT
+            | state["llm"].with_structured_output(GroundedAnswer)
+        )
+        ga: GroundedAnswer = chain.invoke({})
+        stats = _verify_citations_per_node(ga.citations, nodes, fuzzy_min_ratio=70)
+        # Verify grounded citations (anywhere in retrieved text)
+        print('\n-----------------------------------------------------------------------------------------------')
+        print(f'*** Tester spørsmålet: <{question}>')
+        print(f'*** Found context from invoke:{ctx}')
+        problems = stats["problems"]
+        matched_nodes = stats["matched_nodes"]
+        print(f'*** ga.answer: <{ga.answer}>')
+        #print(f'*** query.respons: <{resp.response}>')
+        for i, cit in enumerate(ga.citations):
+                q_raw = (cit.quote or "").strip()
+                print(f'***** citation:{q_raw}')
+        print(f'*** ga Problems: <{problems}>')
+        print('\n-----------------------------------------------------------------------------------------------')
+
+        
+        refs: List[Reference] = []
+        
+        if not problems and ga.answer.strip() and "Det vet jeg ikke basert på kildene." not in ga.answer.strip():
+            state["subquery"].response_validity = "valid"
+            state["subquery"].answer = ga.answer  # ✅ prefer grounded
+            
+            
+            for node in matched_nodes[:5]:
+                if node.score is not None:
+                    meta = node.metadata
+                    refs.append({
+                        "name": meta.get('title', 'Ingen tittel').lstrip(),
+                        "url": meta.get('url', 'Ingen URL'),
+                        "relevancy_index": node.score
+                    })
+            state["subquery"].references = refs
+            print("====================================")
+            print(state)
+            print('====================================')
+            
+            return {}
+        else:
+            # Fallback: safe extractive summary (avoid hallucinations)
+            top_text = "\n\n".join((_node_text(n) or "").strip()[:600] for n in nodes[:2] if _node_text(n))
+            fallback = (
+                "Jeg finner ikke støtte i kildene for alle detaljene. "
+                #"Her er et utdrag fra kildene:\n\n" + top_text
+            )
+            state["subquery"].response_validity = "not valid"
+            state["subquery"].answer = fallback
+            
+            print("====================================")
+            print(state)
+            print('====================================')
+            return {}
+
+    except Exception as e:
+        logging.error(f"Failed to execute agent: {e}")
+        state["subquery"].response_validity = "not valid"
+        state["subquery"].answer = "Jeg klarte ikke å verifisere sitatene nå."
+        return {}
 
 
 def related_queries_and_categories(state: State_AnswerWithRelatedQueries) -> dict:
     """When related_only=True, make sure required fields exist without running answer/validation."""
     writer = get_stream_writer()
+    related_queries = []
+    related_categories = []
     
 
     try:
@@ -365,11 +721,16 @@ def synthesizer(state: State_AnswerWithRelatedQueries):
     
     completed_report_answers=""
     completed_report_answers_non_valid=""
-    
+    combined =""
+    combined_debug =""
     for s in sq:
         if s.response_validity == 'valid':
             combined = f"Subquery: {s.subquery}\n\n"
             combined += f"\nAnswer: {s.answer}\n\n"
+            
+            combined_debug = f"Subquery: {s.subquery}\n\n"
+            combined_debug += f"\nAnswer: {s.answer}\n\n"
+            combined_debug += f"\nRelevancy:{s.response_validity_index}"
             # if s.references:
             #     combined += "## Referanser\n"
             #     for r in s.references:
@@ -377,24 +738,48 @@ def synthesizer(state: State_AnswerWithRelatedQueries):
             completed_report_answers += combined  
         else:
             completed_report_answers_non_valid+=f'\n\nBeklager, men jeg kunne ikke svare på spørsmålet : \"{s.subquery}\"'
-            
-    
-    print(f'completed_report: <<{completed_report_answers}>>')
+            combined_debug+=f'\n\nBeklager, men jeg kunne ikke svare på spørsmålet : \"{s.subquery}\"'
+    print(f'+++++++++++++++++++++++++++++++++++++++++++')
+    print(f's: <<{s}>>')
+    print(f'combined_debug: <<{completed_report_answers}>>')
+    print(f'+++++++++++++++++++++++++++++++++++++++++++')
 
     if completed_report_answers:
         aggregated_answer = llm.invoke(
             [
                 SystemMessage(
                     content=(
-                        "from this list of subqueries and answers, reorganize a final answer. Use markdown formatting.\n"
-                        "STYLE RULES (must follow):\n"
-                        "- Start directly with the answer. No preamble, no meta-text.\n"
-                        "- Do NOT restate the question.\n"
-                        "- Do NOT include the words “Subquery”, “Sub-query”, or any heading that begins with them.\n"
-                        "- Do NOT include phrases like \“Here is…\”, \“Her er…\”, \“Below is…\”, \“Svar på spørsmålet ditt…\”, \"Kort oppsummering\".\n"
+                        "You are a friendly, empathetic, and knowledgeable health advisor designed to help young people in Norway (ages 13–19).\n\n"
+                        "Your task is to synthesize a single, coherent final answer in Norwegian (Bokmål) **based only on the provided list of partial answers**.\n"
+                        "You must **not invent, rephrase, or add new information, claims, explanations, or advice** that are not explicitly present in the provided text.\n"
+                        "If something is missing, unclear, or contradictory, simply omit it — do not attempt to fill in or infer meaning.\n\n"
+
+                        "**Your goal:**\n"
+                        "- Combine overlapping or repeated points from the provided answers into a clean, readable summary.\n"
+                        "- Preserve the factual content and tone exactly as written.\n"
+                        "- Never introduce new claims, interpretations, or guidance.\n"
+                        "- If all provided answers say 'Det vet jeg ikke basert på kildene.', then the final answer must **only** repeat that.\n\n"
+
+                        "**Tone and Style Guidelines (must follow):**\n"
+                        
+                        "1. **Empathy:** The tone should be calm, kind, and supportive — but you may only express empathy if it already exists in the provided text. "
+                        "Do not invent new emotional or motivational statements.\n\n"
+                        
+                        "2. **Teen-Friendly Language (Ages 13–19):**\n"
+                        "- Keep language clear and natural, with short sentences.\n"
+                        "- Avoid medical jargon unless it appears in the provided text.\n"
+                        "- Do not expand or explain terms beyond what’s given.\n\n"
+                        
+                        "3. **Formatting and Structure:**\n"
                         "- Use concise headings expressing the query, only if they add value (e.g., \“Svar på spørsmål om <subquery>\””).\n"
-                        "- Output must be helpful, empathetic, youth-friendly, and in Norwegian Bokmål.\n"
-                        "IF VIOLATED: Prefer omitting the section entirely rather than adding boilerplate.\n"
+                        "- Start directly with the synthesized answer — no preamble or meta text.\n"
+                        "- Do **not** include the words 'Subquery', 'Sub-query', or similar.\n"
+                        "- Do **not** add filler phrases like 'Here is…', 'Below is…', or 'Kort oppsummering'.\n"
+                        "- Use simple markdown formatting and headings only if they already appear or clearly improve readability.\n\n"
+                        "**IMPORTANT:**\n"
+                        "You must never add tips, advice, or suggestions beyond what exists in the provided text.\n"
+                        "If the provided answers contain no usable information, your entire output should simply be:\n"
+                        "\"Det vet jeg ikke basert på kildene.\""
                     )
                 ),
                 HumanMessage( 
@@ -489,11 +874,13 @@ def assign_workers(state: State_AnswerWithRelatedQueries):
     # Kick off section writing in parallel via Send() API
     return [
         Send(
-            "llm_call",
+            "query_grounded",
             {
                 "subquery": s,
                 "query_engine": state["query_engine"],
                 "similarity_cutoff": state["similarity_cutoff"],
+                "llm": state["llm"],
+                "retriever": state["retriever"]
             },
         )
         for s in state["subqueries"]
@@ -504,7 +891,7 @@ builder = StateGraph(State_AnswerWithRelatedQueries)
 
 # Add the nodes
 builder.add_node("orchestrator", orchestrator)
-builder.add_node("llm_call", llm_call)
+builder.add_node("query_grounded", query_grounded)
 builder.add_node("synthesizer", synthesizer)
 builder.add_node("emit_query_answer_references", emit_query_answer_references)
 builder.add_node("related_queries_and_categories", related_queries_and_categories)
@@ -519,9 +906,9 @@ builder.add_conditional_edges(
     },
 )
 builder.add_conditional_edges(
-    "orchestrator", assign_workers, ["llm_call"]
+    "orchestrator", assign_workers, ["query_grounded"]
 )
-builder.add_edge("llm_call", "synthesizer")
+builder.add_edge("query_grounded", "synthesizer")
 builder.add_edge("synthesizer", "emit_query_answer_references")
 builder.add_edge("emit_query_answer_references", "related_queries_and_categories")
 

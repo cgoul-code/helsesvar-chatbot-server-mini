@@ -7,7 +7,7 @@ from typing import List, Literal, Optional
 from typing_extensions import TypedDict
 from sklearn.metrics.pairwise import cosine_similarity
 import registry
-from registry import severity_for_text_prompt, severity_for_query_prompt, qa_subject_no_prompt, vectorindex_summary_prompt, categorize_text_prompt
+from registry import severity_for_query_prompt, qa_subject_no_prompt, vectorindex_summary_prompt, categorize_text_prompt
 
 import pandas as pd
 from pandas import json_normalize
@@ -106,21 +106,21 @@ def _persist_storage_for_item(name: str, storage:str, blob_storage: str, documen
     #     api_version=os.getenv("AZURE_OPENAI_EMBEDDINGS_API_VERSION"),
     # )
 
-        # nodes = Settings.text_splitter.get_nodes_from_documents(documents)
+        nodes = Settings.text_splitter.get_nodes_from_documents(documents)
 
-        # logging.info ('3 - SentenceSplitter ok')
+        logging.info ('3 - SentenceSplitter ok')
 
-        # for node in nodes:
-        #     logging.info(f'\n\n---Node---:\n{node.metadata}')
+        for node in nodes:
+            logging.info(f'\n\n---Node---:\n{node.metadata}')
 
 
-        # logging.info(f'4 - Loaded {len(nodes)} nodes')
+        logging.info(f'4 - Loaded {len(nodes)} nodes')
 
-        # # Create and persist the index
-        # storage_context = StorageContext.from_defaults()
-        # logging.info('5 - StorageContext.from_defaults ok')
+        # Create and persist the index
+        storage_context = StorageContext.from_defaults()
+        logging.info('5 - StorageContext.from_defaults ok')
 
-        # index = VectorStoreIndex(nodes, storage_context=storage_context)
+        index = VectorStoreIndex(nodes, storage_context=storage_context)
         
         storage_context = StorageContext.from_defaults()
         index = VectorStoreIndex.from_documents(
@@ -481,7 +481,6 @@ def create_metadata_for_documents(state: State_buildIndex) -> dict:
             if not isinstance(questions, list) or not all(isinstance(x, str) for x in questions):
                 raise ValueError("'Questions' must be a list of strings")
             doc.metadata["answered_questions"] = questions
-            
             category_obj = json.loads(category_raw)
             category = category_obj.get("kategori")
             doc.metadata["category"] = category

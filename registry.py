@@ -126,12 +126,16 @@ REFINE_AND_CLASSIFY = Prompt(
 CLASSIFY_AND_SUBQUERIES = Prompt(
     id="classify_and_subqueries",
     template=(
-        "You are given a user query. Perform three tasks:\n"
-        "1) Rewrite the user's query in Norwegian so that it is clear and easy to understand.\n"
-        "- Please refine the user's query in a readable way in Norwegian.\n"
+        "You are given a user query. Perform the following tasks:\n"
+        # "1) Rewrite the user's query in Norwegian so that it is clear and easy to understand.\n"
+        # "- Please refine the user's query in a readable way in Norwegian.\n"
+        # "- Ensure that the 'I' form is preserved.\n"
+        # "- Return only one refined version; do not return alternatives.\n"
+        # "\n"
+        "1) If the user query har several queries, generate several subqueries. \n"
+        "- Do not answer the subqueries\n"
         "- Ensure that the 'I' form is preserved.\n"
-        "- Return only one refined version; do not return alternatives.\n"
-        "\n"
+        "- Return only one version for each subquery; do not return alternatives.\n"
         "2) Categorize the severity of this query into one of three categories: Green, Yellow, or Red.\n\n"
         "Green category:\n"
         "- Preventive and safety-promoting.\n"
@@ -159,10 +163,7 @@ CLASSIFY_AND_SUBQUERIES = Prompt(
         "If none fits, answer 'Unknown'.\n"
         "Main categories with subcategories: {categories}\n"
         "\n"
-        "4) If the user query har several queries, generate several subqueries. \n"
-        "- Do not answer the subqueries\n"
-        "- Ensure that the 'I' form is preserved.\n"
-        "- Return only one version for each subquery; do not return alternatives.\n"
+
         "OUTPUT REQUIREMENTS:\n"
         "- No explanations, no markdown, no code fences.\n"
         "- Use double quotes for all keys and strings. No trailing commas.\n"
@@ -189,6 +190,54 @@ QUERY_RERANK_IDS = Prompt(
         '{{"selected_ids":["id1","id2"]}}'
     )
 )
+CATEGORIZE_TEXT = Prompt(
+    id = "caegorize_text",
+    template=(
+        "Du skal kategorisere en tekst innenfor én av hovedkategoriene nedenfor. \n"
+        "Hver hovedkategori har en liste med underkategorier og nøkkelord som hjelper deg å bestemme. \n"
+        "Velg kun ÉN hovedkategori, den som passer best. \n"
+        "Hvis ingen passer, svar 'Ukjent'.\n"
+        "Hovedkategorier med underkategorier: {categories}\n"
+        "\n"
+        "Tekst: {text}\n"
+        "\n"
+        "Svarformat (kun JSON):\n"
+        '{{\"kategori\": \"<hovedkategori>\"}}'
+    )
+)
+
+SEVERITY_FOR_QUERY = Prompt(
+    id="severity_for_query",
+    template=(
+        "You are given a user query: {query}\n\n"
+        "Categorize the severity of this query into one of three categories: Green, Yellow, or Red.\n\n"
+        "Green category:\n"
+        "- Preventive and safety-promoting.\n"
+        "- Queries that ask for general information, knowledge, or guidance to prevent problems and strengthen good sexual health.\n"
+        "- The user is seeking to increase understanding, safety, and awareness (e.g., consent, contraception, communication, emotions, body knowledge).\n"
+        "- No acute situation or personal crisis is described.\n"
+        'Example: "How can I talk with my partner about boundaries?" or "What types of contraception exist?".\n\n'
+        "Yellow category:\n"
+        "- Challenges or vulnerable situations.\n"
+        "- Queries that describe concerns, difficulties, or risks that may require reflection or support, but are not acute or immediately dangerous.\n"
+        "- May involve difficult feelings, uncertainty in relationships, unwanted experiences, or the need for advice beyond general information.\n"
+        "- The user may need to seek help or guidance, but the situation is not considered an acute crisis.\n"
+        'Example: "What should I do if my partner doesn’t respect my boundaries?", '
+        '"I regret sending a nude", or topics like "pornography", "sexual pressure", "issues around consent", "(illegal) fetishes".\n\n'
+        "Red category:\n"
+        "- Serious or acute situations.\n"
+        "- Queries that concern serious incidents or crises where the person involved may be in danger or at significant risk of harm.\n"
+        "- Includes violence, abuse, coercion, acute psychological crises, or other situations that require immediate follow-up or professional help.\n"
+        "- The main purpose of the response should be to direct the user to where and how to get help quickly.\n"
+        'Example: "My stepfather forces me to have sex", "Where can I find child pornography?", "I was raped yesterday".\n\n'
+        "Output requirements:\n"
+        "- Return JSON ONLY. No explanations. No markdown. No code fences.\n"
+        '- Use double quotes for all keys and strings.\n'
+        "- Do not include trailing commas.\n"
+        '- Output shape:\n'
+        '{{ \"category\": \"<Green|Yellow|Red>\" }}'
+    ),
+)
 
 # (Optional) A small registry if you prefer string-based lookups
 REGISTRY: Dict[str, Prompt] = {
@@ -199,6 +248,12 @@ REGISTRY: Dict[str, Prompt] = {
 
 
 # === Helper “renderers” you can import directly ===
+
+def severity_for_query_prompt(query: str) -> str:
+    return SEVERITY_FOR_QUERY.render(query=query)
+
+def categorize_text_prompt(text: str, categories: str) -> str:
+    return CATEGORIZE_TEXT.render(text=text, categories=categories)
 
 def vectorindex_summary_prompt(text: str) -> str:
     return VECTORINDEX_SUMMARY.render(text=text)

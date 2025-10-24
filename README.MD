@@ -201,7 +201,7 @@ pip cache purge
 # Remove-Item -Recurse -Force "$env:LocalAppData\pip\Cache"
 
 # 5) Fresh install from requirements.txt with no cache
-pip install --no-cache-dir -r requirements.txt
+.\.venv\Scripts\python.exe -m pip install --no-cache-dir -r requirements.txt
 
 ## Tips for reinstall llama-index:
 pip install llama-index --upgrade --no-cache-dir --force-reinstall 
@@ -228,4 +228,6 @@ cat requests.log.2025-05-2
 Download the containers:
  az storage blob download-batch --destination C:/Users/ChristianGoulignac/Downloads --source chatbot --account-name helsesvar --account-key COzcrGBg34QJ+KF1yAXG71xuIlbzFIDk2MxjH7If7Dfa22vhU5CftWhqrqFx+u10Pa+B85ryt3NR+AStEIpHLA==
 
-
+## kjøre build index under utils:
+# C:\Users\ChristianGoulignac\vscode\llama
+.\llama_chatbot_server_mini\.venv\Scripts\python.exe -m llama_chatbot_server_mini.utils.create_vectorindex.build_hei_index
