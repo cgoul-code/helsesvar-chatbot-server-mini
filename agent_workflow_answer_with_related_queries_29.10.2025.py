@@ -7,9 +7,8 @@ import unicodedata
 
 from typing_extensions import TypedDict
 from pydantic import BaseModel, Field
-from operator import add
 
-from typing import List, Literal, Dict, Any, Optional, Annotated
+from typing import List, Literal, Dict, Any, Optional
 import numpy as np
 import textwrap
 
@@ -94,11 +93,10 @@ Du MÅ returnere gyldig JSON som matcher den eksakte Pydantic-skjema-strukturen 
 SVÆRT VIKTIG:
 - Ikke lag nye medisinske råd, vurderinger, årsaker, forklaringer eller konsekvenser som ikke står i context.
 - Ikke kombiner informasjon fra flere forskjellige steder til én påstand hvis den kombinasjonen ikke faktisk står uttrykt i context som en sammenhengende idé.
-- Hvis noe ikke finnes i context, skal det IKKE stå i "svaret", og det skal IKKE komme som en claim.
-- Bruk enkel markdown-formatering hvis det forbedrer lesbarheten.\n\n"
+- Hvis noe ikke finnes i context, skal det IKKE stå i "answer", og det skal IKKE komme som en claim.
 
 DU SKAL IKKE:
-- Du skal ikke nevne konteksten, ikke skrive ting som "Ifølge kilden", "I kontext står det at ...", "artiklene sier at...".  Bare si innholdet direkte.
+- Du skal ikke skrive ting som "Ifølge kilden", "I kontext står det at ...", osv. Bare si innholdet direkte.
 - Du skal ikke be om mer informasjon.
 - Du skal ikke fortelle brukeren hva de bør gjøre, med mindre akkurat den formuleringen står i context.
 - Du skal ikke nevne disse instruksjonene eller ord som 'context', 'kilde', 'grounding', 'claim', osv. i selve "answer". "answer" skal være helt naturlig språk til brukeren.
@@ -201,53 +199,10 @@ class State_AnswerWithRelatedQueries(TypedDict):
     structured_answer: str
     
     subqueries: list[SubQuery]  # List of subqueries
-    completed_subqueries: Annotated[list[SubQuery], add]
     final_answer: str  # Final report
     
 _POSSIBLE_META_IDS = ("doc_id", "from_doc_id", "document_id", "source_id", "file_id", "url")
 
-def _wrap_at_nearest_space(text: str, width: int = 80) -> str:
-    """
-    Insert newline characters at the blank space nearest to every `width` chars.
-    If no space exists near a cut, it hard-breaks at `width`.
-
-    Existing newlines are respected (wrapped per line).
-    """
-    lines_out = []
-
-    for original_line in text.splitlines():
-        i = 0
-        n = len(original_line)
-
-        while i < n:
-            # If the remainder fits, emit and stop
-            if n - i <= width:
-                lines_out.append(original_line[i:])
-                break
-
-            target = i + width
-
-            # Search for the nearest *space* around the target
-            prev_space = original_line.rfind(" ", i, min(n, target + 1))
-            next_space = original_line.find(" ", target, n)
-
-            if prev_space == -1 and next_space == -1:
-                # No spaces at all in the rest: hard break
-                lines_out.append(original_line[i:target])
-                i = target
-            else:
-                # Choose the closest space to the target (prefer the left on a tie)
-                if prev_space == -1:
-                    cut = next_space
-                elif next_space == -1:
-                    cut = prev_space
-                else:
-                    cut = prev_space if (target - prev_space) <= (next_space - target) else next_space
-
-                lines_out.append(original_line[i:cut])
-                i = cut + 1  # skip the space we broke at
-
-    return "\n".join(s.rstrip() for s in lines_out)
 
 def _collect_ids(node) -> list[str]:
     meta = getattr(node, "metadata", {}) or {}
@@ -302,7 +257,7 @@ def _normalize(s: str, *, collapse_ws: bool = True, case_sensitive: bool = False
         s = _WS.sub(" ", s)
     return s if case_sensitive else s.casefold()
 
-def _format_context_from_nodes(nodes, max_chars_per_node=3000, max_nodes=100) -> str:
+def _format_context_from_nodes(nodes, max_chars_per_node=1800, max_nodes=6) -> str:
     parts = []
     for nws in nodes[:max_nodes]:
         node = getattr(nws, "node", nws)
@@ -583,8 +538,6 @@ def _verify_claims(
 
         # Add to global problems
         global_problems.extend(per_claim_problems)
-        
-        print(claims_report)
 
     return {
         "global_problems": global_problems,
@@ -803,67 +756,19 @@ def query_grounded(state: WorkerState) -> dict:
     writer({"event": "info", "message": f"Worker answers the subquery \"{state['subquery'].subquery}\""})
 
     try:
+        #qe = state["query_engine"]
         retriever = state["retriever"]
         question = state["subquery"].subquery
 
-        # 1) Retrieve NodeWithScore objects
+        # Retrieve
+        #resp = qe.query(question)
+        
+        #nodes = getattr(resp, "source_nodes", []) or []
         nodes = retriever.retrieve(question) or []
 
-        # 2) Build a pretty list only for logging/debug (OPTIONAL)
-        nodes_pretty = []
-        for nws in nodes:
-            node_obj = getattr(nws, "node", nws)
-            meta = getattr(node_obj, "metadata", {}) or {}
-            nodes_pretty.append({
-                "id": _preferred_display_id(node_obj),
-                "url": meta.get("url", ""),
-                "title": meta.get("title", ""),
-                "score": getattr(nws, "score", None),
-            })
-
-        # 3) Validity check based on best score
-        thresholds = state.get("relevancy_thresholds", {
-            "strong": 0.60,
-            "medium": 0.55,
-            "weak":   0.35,
-        })
-
-        # Only consider nodes that actually have a numeric score
-        scored_nodes = [n for n in nodes if getattr(n, "score", None) is not None]
-        if not scored_nodes:
-            # no scored nodes at all
-            state["subquery"].response_validity = "not valid"
-            state["subquery"].answer = ("Jeg beklager, men jeg kan bare svare på spørsmål basert på den gitte "
-                                        "konteksten")
-            return {"completed_subqueries": [state["subquery"]]}
-
-        best_nws = max(scored_nodes, key=lambda n: n.score)  # <- n is NodeWithScore
-        best_score = float(getattr(best_nws, "score", 0.0))
-        band = _classify_relevancy(best_score, thresholds)
-        logging.info(f"Band: {band} for {question}, best score: {best_score:.3f}")
-
-        # Build refs from the top few scored nodes
-        refs: List[Reference] = []
-        for nws in scored_nodes[:5]:
-            node_obj = getattr(nws, "node", nws)
-            meta = getattr(node_obj, "metadata", {}) or {}
-            refs.append({
-                "name": (meta.get("title") or "Ingen tittel").lstrip(),
-                "url": meta.get("url", "Ingen URL"),
-                "relevancy_index": float(getattr(nws, "score", 0.0)),
-            })
-
-        state['subquery'].response_validity_index = best_score
-
-        if band == "Rejected":
-            state['subquery'].response_validity = "not valid"
-            state['subquery'].answer = ("Jeg beklager, men jeg kan bare svare på spørsmål basert på den gitte "
-                                        "konteksten")
-            return {"completed_subqueries": [state["subquery"]]}
-
-        # 4) Build grounded context from the ORIGINAL nodes (not the dicts)
+        # Build grounded context and get structured output
         ctx = _format_context_from_nodes(nodes)
-
+        
         chain = (
             RunnableLambda(lambda _: {"question": question, "context": ctx})
             | GROUNDED_PROMPT
@@ -871,116 +776,97 @@ def query_grounded(state: WorkerState) -> dict:
         )
         ga: GroundedAnswer = chain.invoke({})
         
-
-        # 5) Validate claims against the ORIGINAL nodes
-        #
-        results = _verify_claims(
-            ga,
-            nodes,
-            min_quote_chars=8,
-            collapse_whitespace=True,
-            case_sensitive=False,
-            fuzzy_min_ratio=60,
-        )
-
-        # 6) Emit your systeminfo UI (unchanged)
-        global_problems = results.get("global_problems", [])
-        claims_report = results.get("claims_report", [])
-        answer_wrapped = _wrap_at_nearest_space(ga.answer, width=120)
-
-        # Intro
-        _emit(f"## Delspørsmål: {question}", event="systeminfo")
-        _emit(f"## Svar på delspørsmål:", event="systeminfo")
-        _emit(f"{answer_wrapped}", event="systeminfo")
-        _emit("\u00A0\n", event="systeminfo")
-        _emit("\u00A0\n", event="systeminfo")
-        _emit(" --- ", event="systeminfo")
         
-        _emit("## Validering av påstander:", event="systeminfo")
-        _emit("\n", event="systeminfo")
-
-        # Iterate each claim
-        state["subquery"].response_validity = "valid"
-        for claim_entry in claims_report:
-            idx = claim_entry["claim_index"]
-            claim_text = claim_entry["claim_text"]
-            validity_reported = claim_entry["validity_reported"]
-            any_citation_valid = claim_entry["any_citation_valid"]
-            all_citations_valid = claim_entry["all_citations_valid"]
-            problems = claim_entry["problems"]
-            citations_report = claim_entry["citations_report"]
-
-            # Section header for this claim
-            _emit(f"\n", event="systeminfo")
-            _emit(f"# **Påstand {idx}: {claim_text}** ", event="systeminfo")
-            #_emit("", event="systeminfo")
-
-            # --- CLAIM SUMMARY:
-            _emit(f"Minst én sitat-treff: {any_citation_valid}", event="systeminfo")
-            _emit(f"Alle sitater gyldige: {all_citations_valid}", event="systeminfo")
-      
-            # Problems for this claim (if any)
-            if problems:
-                _emit("**Problemer for denne påstanden:**", event="systeminfo")
-                for p in problems:
-                    _emit(f"- {p}", event="systeminfo")
-                _emit("", event="systeminfo")
-
-            # --- CITATIONS TABLE (ASCII, monospaced) ---
-            _emit("Sitat-tilknytning:", event="systeminfo")
-
-            for cit in citations_report:
-                cit_i = cit["citation_index"]
-                found_in_nodes = cit["found_in_nodes"]
-                url_val = cit["url"] or "Ingen URL"
-                url_str = f"[{url_val}]({url_val})"
-                quote_val = cit["quote"] or ""
-
-                short_quote = quote_val.strip()
-                if len(short_quote) > 140:
-                    short_quote = short_quote[:137] + "..."
-                short_quote = _wrap_at_nearest_space(short_quote, width=120)
-
-                def esc(cell: str) -> str:
-                    return cell.replace("|", "\\|")
-
-                s = f"{cit_i} {'✅' if found_in_nodes else '❌'}  {short_quote} \n {esc(url_str)}"
-                _emit(s, event="systeminfo")
+        
+        
+        
+        
+        
+        
+        
+        
+        stats = _verify_citations_per_node(ga.citations, nodes, fuzzy_min_ratio=70)
+        # Verify grounded citations (anywhere in retrieved text)
+        print('\n-----------------------------------------------------------------------------------------------')
+        print(f'*** Tester spørsmålet: <{question}>')
+        
+        _emit(f"## Spørsmål:", event="systeminfo")
+        _emit(question, event="systeminfo")
+        #print(f'*** Found context from invoke:{ctx}')
+        problems = stats["problems"]
+        matched_nodes = stats["matched_nodes"]
+        print(f'*** ga.answer: <{ga.answer}>')
+        #print(f'*** query.respons: <{resp.response}>')
+   
+        
+        # for i, c in enumerate(ga.claims):
+        #     print(f"****claim[{i}]:{c}")
+        #     _emit(f"Påstand[{i}]:{c}", event="systeminfo")
+        
+        _emit("### Påstander og sitater\n", event="systeminfo")
+        _emit("| **Påstand** | **Sitat** | ***Kilde** |", event="systeminfo")
+        _emit("|---|-------|-------|", event="systeminfo")
+        for i, cit in enumerate(ga.citations):
+                c = ga.claims[i]
+                q_raw = (cit.quote or "").strip()
+                url = (cit.url or "").strip()
+                
+                row = f"| {c} | {q_raw} | [{url}]({url}) |"
+                _emit(row, event="systeminfo")
+                
+        print(f'*** ga Problems: <{problems}>')
+        if problems:
+            _emit("### Problemer\n", event="systeminfo")
+            _emit("| **Påstand med feil sitat** |", event="systeminfo")
+            _emit("|-------|", event="systeminfo")
+            for i, p in problems:
+                row = f"| {p} |"
+                _emit 
             
+        print('\n-----------------------------------------------------------------------------------------------')
 
-            # Per-citation problems (if any)
-            any_cit_problem = any(cit["problems"] for cit in citations_report)
-            if any_cit_problem:
-                _emit("**Detaljer per sitat:**", event="systeminfo")
-                for cit in citations_report:
-                    if not cit["problems"]:
-                        continue
-                    cit_i = cit["citation_index"]
-                    _emit(f"- Sitat {cit_i}:", event="systeminfo")
-                    for cp in cit["problems"]:
-                        _emit(f"  - {cp}", event="systeminfo")
-                _emit("", event="systeminfo")
-                state["subquery"].response_validity = "not valid"
-
-            # Divider between claims
-            _emit("\u00A0\n", event="systeminfo")
-            _emit("\u00A0\n", event="systeminfo")
-            _emit(" --- ", event="systeminfo")
-            _emit("\u00A0\n", event="systeminfo")
-
-        res = state["subquery"].response_validity
-        _emit(f"## Resultat: {res}", event="systeminfo")
         
-
-        state["subquery"].answer = ga.answer
-        state["subquery"].references = refs
-        return {"completed_subqueries": [state["subquery"]]}
+        refs: List[Reference] = []
+        state["subquery"].response_validity = "valid"
+        if not problems and ga.answer.strip() and "Det vet jeg ikke basert på kildene." not in ga.answer.strip():
+            state["subquery"].response_validity = "valid"
+            state["subquery"].answer = ga.answer  # ✅ prefer grounded
+            
+            
+            for node in matched_nodes[:5]:
+                if node.score is not None:
+                    meta = node.metadata
+                    refs.append({
+                        "name": meta.get('title', 'Ingen tittel').lstrip(),
+                        "url": meta.get('url', 'Ingen URL'),
+                        "relevancy_index": node.score
+                    })
+            state["subquery"].references = refs
+            print("====================================")
+            print(state)
+            print('====================================')
+            
+            return {}
+        else:
+            # Fallback: safe extractive summary (avoid hallucinations)
+            top_text = "\n\n".join((_node_text(n) or "").strip()[:600] for n in nodes[:2] if _node_text(n))
+            fallback = (
+                "Jeg finner ikke støtte i kildene for alle detaljene. "
+                #"Her er et utdrag fra kildene:\n\n" + top_text
+            )
+            state["subquery"].response_validity = "not valid"
+            state["subquery"].answer = fallback
+            
+            print("====================================")
+            print(state)
+            print('====================================')
+            return {}
 
     except Exception as e:
         logging.error(f"Failed to execute agent: {e}")
         state["subquery"].response_validity = "not valid"
         state["subquery"].answer = "Jeg klarte ikke å verifisere sitatene nå."
-        return {"completed_subqueries": [state["subquery"]]}
+        return {}
 
 
 def related_queries_and_categories(state: State_AnswerWithRelatedQueries) -> dict:
@@ -1065,122 +951,115 @@ def synthesizer(state: State_AnswerWithRelatedQueries):
     
     writer = get_stream_writer()  
     writer({"event": "info", "message":"Synthesize full answer"}) 
-    print("Synthesize full answer")
     
     llm = state["llm"]
     
-    try:
-        
-        # Get the list of SubQuery objects
-        sq: list[SubQuery] = state.get("completed_subqueries", []) or []
-        
-        completed_report_answers=""
-        completed_report_answers_non_valid=""
-        combined =""
-        combined_debug =""
-        for s in sq:
-            if s.response_validity == 'valid':
-                combined = f"Subquery: {s.subquery}\n\n"
-                combined += f"\nAnswer: {s.answer}\n\n"
-                
-                combined_debug = f"Subquery: {s.subquery}\n\n"
-                combined_debug += f"\nAnswer: {s.answer}\n\n"
-                combined_debug += f"\nRelevancy:{s.response_validity_index}"
-                # if s.references:
-                #     combined += "## Referanser\n"
-                #     for r in s.references:
-                #         combined += f"- [{r['name']}]({r['url']}) , relevans: {r['relevancy_index']:.2f}\n"
-                completed_report_answers += combined  
-            else:
-                completed_report_answers_non_valid+=f'\n\nBeklager, men jeg kunne ikke svare på spørsmålet : \"{s.subquery}\"'
-                combined_debug+=f'\n\nBeklager, men jeg kunne ikke svare på spørsmålet : \"{s.subquery}\"'
-        print(f'<+++++++++++++++++++++++++++++++++++++++++++')
-        print(f's: <<{s}>>')
-        print(f'combined_debug: <<{completed_report_answers}>>')
-        print(f'+++++++++++++++++++++++++++++++++++++++++++>')
-
-        if completed_report_answers:
-            aggregated_answer = llm.invoke(
-                [
-                    SystemMessage(
-                        content = (
-                            "Du er en vennlig, empatisk og kunnskapsrik helseveileder laget for å hjelpe ungdom i Norge (alder 13–19 år).\n\n"
-                            "Din oppgave er å sette sammen et enkelt, helhetlig og sammenhengende svar på norsk (bokmål) **kun basert på den gitte listen med del-svar**.\n"
-                            "Du skal **ikke finne på, omformulere eller legge til ny informasjon, påstander, forklaringer eller råd** som ikke uttrykkelig finnes i den gitte teksten.\n"
-                            "Hvis noe mangler, er uklart eller motsier seg selv, skal du bare utelate det — ikke prøv å fylle inn eller tolke meningen.\n\n"
-
-                            "**Målet ditt:**\n"
-                            "- Slå sammen overlappende eller gjentatte poenger fra de gitte del-svarene til et ryddig og lettlest sammendrag.\n"
-                            "- Behold det faktiske innholdet og tonen nøyaktig slik de er skrevet.\n"
-                            "- Ikke legg til nye påstander, tolkninger eller veiledning.\n"
-                            "- Hvis alle del-svarene sier «Det vet jeg ikke basert på kildene.», skal det endelige svaret **kun** gjenta det.\n\n"
-
-                            "**Retningslinjer for tone og stil (må følges):**\n\n"
-                            
-                            "1. **Empati:** Tonen skal være rolig, vennlig og støttende — men du kan bare uttrykke empati dersom det allerede finnes i den gitte teksten. "
-                            "Ikke finn på nye følelsesmessige eller motiverende utsagn.\n\n"
-                            
-                            "2. **Ungdomsvennlig språk (13–19 år):**\n"
-                            "- Bruk et klart og naturlig språk med korte setninger.\n"
-                            "- Unngå medisinske faguttrykk, med mindre de allerede finnes i teksten.\n"
-                            "- Ikke utvid eller forklar begreper utover det som står skrevet.\n\n"
-                            
-                            "3. **Formatering og struktur:**\n"
-                            "- Bruk korte overskrifter som uttrykker temaet for delspørsmålet.\n"
-                            "- Start direkte med det sammensatte svaret — ikke bruk innledninger.\n"
-                            "- Ikke henvise til konteksten, tekstene, referansetekstene, kildene eller artiklene\n"
-                            "- Ikke legg til fyllord som 'Her er…', 'Nedenfor finner du…' eller 'Kort oppsummering'.\n"
-                            "- Bruk enkel markdown-formatering og overskrifter bare hvis de allerede finnes, eller tydelig forbedrer lesbarheten.\n\n"
-                            
-                            "**VIKTIG:**\n"
-                            "Du må aldri legge til tips, råd eller forslag utover det som finnes i teksten.\n"
-                            "Hvis de gitte del-svarene ikke inneholder brukbar informasjon, skal hele svaret ditt rett og slett være:\n"
-                            "\"Det vet jeg ikke basert på kildene.\""
-                            )
-
-                        ),
-                    HumanMessage( 
-                        content=f"Here is the list of answers: {completed_report_answers}"
-                    ),
-                ]
-            )
+      # Get the list of SubQuery objects
+    sq: list[SubQuery] = state["subqueries"]
     
+    completed_report_answers=""
+    completed_report_answers_non_valid=""
+    combined =""
+    combined_debug =""
+    for s in sq:
+        if s.response_validity == 'valid':
+            combined = f"Subquery: {s.subquery}\n\n"
+            combined += f"\nAnswer: {s.answer}\n\n"
             
-            logging.info(f"Here is the list of answers: {completed_report_answers}")
-            
-            # build the most relavant references
-            #
-            ref_list =[]
-            for s in sq:
-                if s.references and s.response_validity == "valid":
-                    #combined += "\n## Referanser\n"
-                    for r in s.references:
-                        ref_list.append(r)
-                        
-        ## keep best score per URL
-            best_by_url = {}
-            for r in ref_list:
-                url = r.get("url") if isinstance(r, dict) else getattr(r, "url", None)
-                score = r.get("relevancy_index") if isinstance(r, dict) else getattr(r, "relevancy_index", None)
-                if url is None or score is None:
-                    continue  # skip malformed rows
-
-                # keep the highest score per URL
-                if (url not in best_by_url) or (score > best_by_url[url]["relevancy_index"]):
-                    best_by_url[url] = r
-
-            ## take the 5 highest by relevancy_index
-            top5 = heapq.nlargest(5, best_by_url.values(), key=lambda x: x["relevancy_index"])
-            return {"final_answer": aggregated_answer.content + completed_report_answers_non_valid,
-                "references": top5,
-                }
+            combined_debug = f"Subquery: {s.subquery}\n\n"
+            combined_debug += f"\nAnswer: {s.answer}\n\n"
+            combined_debug += f"\nRelevancy:{s.response_validity_index}"
+            # if s.references:
+            #     combined += "## Referanser\n"
+            #     for r in s.references:
+            #         combined += f"- [{r['name']}]({r['url']}) , relevans: {r['relevancy_index']:.2f}\n"
+            completed_report_answers += combined  
         else:
-            return {"final_answer": "Jeg beklager, men jeg kan bare svare på spørsmål basert på den gitte konteksten",
-                "references": [],
-                }
-            
-    except Exception as e:
-       logging.error(f"Failed to execute agent: {e} ")        
+            completed_report_answers_non_valid+=f'\n\nBeklager, men jeg kunne ikke svare på spørsmålet : \"{s.subquery}\" <{s.response_validity}>'
+            combined_debug+=f'\n\nBeklager, men jeg kunne ikke svare på spørsmålet : \"{s.subquery}\"'
+    print(f'+++++++++++++++++++++++++++++++++++++++++++')
+    print(f's: <<{s}>>')
+    print(f'combined_debug: <<{completed_report_answers}>>')
+    print(f'+++++++++++++++++++++++++++++++++++++++++++')
+
+    if completed_report_answers:
+        aggregated_answer = llm.invoke(
+            [
+                SystemMessage(
+                    content=(
+                        "You are a friendly, empathetic, and knowledgeable health advisor designed to help young people in Norway (ages 13–19).\n\n"
+                        "Your task is to synthesize a single, coherent final answer in Norwegian (Bokmål) **based only on the provided list of partial answers**.\n"
+                        "You must **not invent, rephrase, or add new information, claims, explanations, or advice** that are not explicitly present in the provided text.\n"
+                        "If something is missing, unclear, or contradictory, simply omit it — do not attempt to fill in or infer meaning.\n\n"
+
+                        "**Your goal:**\n"
+                        "- Combine overlapping or repeated points from the provided answers into a clean, readable summary.\n"
+                        "- Preserve the factual content and tone exactly as written.\n"
+                        "- Never introduce new claims, interpretations, or guidance.\n"
+                        "- If all provided answers say 'Det vet jeg ikke basert på kildene.', then the final answer must **only** repeat that.\n\n"
+
+                        "**Tone and Style Guidelines (must follow):**\n"
+                        
+                        "1. **Empathy:** The tone should be calm, kind, and supportive — but you may only express empathy if it already exists in the provided text. "
+                        "Do not invent new emotional or motivational statements.\n\n"
+                        
+                        "2. **Teen-Friendly Language (Ages 13–19):**\n"
+                        "- Keep language clear and natural, with short sentences.\n"
+                        "- Avoid medical jargon unless it appears in the provided text.\n"
+                        "- Do not expand or explain terms beyond what’s given.\n\n"
+                        
+                        "3. **Formatting and Structure:**\n"
+                        "- Use concise headings expressing the query, only if they add value (e.g., \“Svar på spørsmål om <subquery>\””).\n"
+                        "- Start directly with the synthesized answer — no preamble or meta text.\n"
+                        "- Do **not** include the words 'Subquery', 'Sub-query', or similar.\n"
+                        "- Do **not** add filler phrases like 'Here is…', 'Below is…', or 'Kort oppsummering'.\n"
+                        "- Use simple markdown formatting and headings only if they already appear or clearly improve readability.\n\n"
+                        "**IMPORTANT:**\n"
+                        "You must never add tips, advice, or suggestions beyond what exists in the provided text.\n"
+                        "If the provided answers contain no usable information, your entire output should simply be:\n"
+                        "\"Det vet jeg ikke basert på kildene.\""
+                    )
+                ),
+                HumanMessage( 
+                    content=f"Here is the list of answers: {completed_report_answers}"
+                ),
+            ]
+        )
+  
+        
+        logging.info(f"Here is the list of answers: {completed_report_answers}")
+        
+        # build the most relavant references
+        #
+        ref_list =[]
+        for s in sq:
+            if s.references and s.response_validity == "valid":
+                #combined += "\n## Referanser\n"
+                for r in s.references:
+                    ref_list.append(r)
+                    
+    ## keep best score per URL
+        best_by_url = {}
+        for r in ref_list:
+            url = r.get("url") if isinstance(r, dict) else getattr(r, "url", None)
+            score = r.get("relevancy_index") if isinstance(r, dict) else getattr(r, "relevancy_index", None)
+            if url is None or score is None:
+                continue  # skip malformed rows
+
+            # keep the highest score per URL
+            if (url not in best_by_url) or (score > best_by_url[url]["relevancy_index"]):
+                best_by_url[url] = r
+
+        ## take the 5 highest by relevancy_index
+        top5 = heapq.nlargest(5, best_by_url.values(), key=lambda x: x["relevancy_index"])
+        return {"final_answer": aggregated_answer.content + completed_report_answers_non_valid,
+            "references": top5,
+            }
+    else:
+        return {"final_answer": "Jeg beklager, men jeg kan bare svare på spørsmål basert på den gitte konteksten",
+            "references": [],
+            }
+      
  
 
 def emit_query_answer_references(state: State_AnswerWithRelatedQueries):
@@ -1251,7 +1130,7 @@ builder = StateGraph(State_AnswerWithRelatedQueries)
 # Add the nodes
 builder.add_node("orchestrator", orchestrator)
 builder.add_node("query_grounded", query_grounded)
-builder.add_node("synthesizer", synthesizer, join=True)
+builder.add_node("synthesizer", synthesizer)
 builder.add_node("emit_query_answer_references", emit_query_answer_references)
 builder.add_node("related_queries_and_categories", related_queries_and_categories)
 
