@@ -413,6 +413,7 @@ async def get_answer_with_related_queries_as_stream(
         "feedback": "",
         "references": [],
         "structured_answer": "",
+        "completed_subqueries": [],
     }
 
 
