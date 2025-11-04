@@ -5,15 +5,21 @@ config:
 ---
 graph TD;
 	__start__([<p>__start__</p>]):::first
+	maybe_use_related_q(maybe_use_related_q)
 	orchestrator(orchestrator)
 	query_grounded(query_grounded)
 	synthesizer(synthesizer)
 	emit_query_answer_references(emit_query_answer_references)
 	related_queries_and_categories(related_queries_and_categories)
 	__end__([<p>__end__</p>]):::last
+	__start__ -. &nbsp;emit&nbsp; .-> emit_query_answer_references;
+	__start__ --> maybe_use_related_q;
 	__start__ -. &nbsp;full&nbsp; .-> orchestrator;
 	__start__ -. &nbsp;related_only&nbsp; .-> related_queries_and_categories;
 	emit_query_answer_references --> related_queries_and_categories;
+	maybe_use_related_q -. &nbsp;emit&nbsp; .-> emit_query_answer_references;
+	maybe_use_related_q -. &nbsp;full&nbsp; .-> orchestrator;
+	maybe_use_related_q -. &nbsp;related_only&nbsp; .-> related_queries_and_categories;
 	orchestrator -.-> query_grounded;
 	query_grounded --> synthesizer;
 	synthesizer --> emit_query_answer_references;

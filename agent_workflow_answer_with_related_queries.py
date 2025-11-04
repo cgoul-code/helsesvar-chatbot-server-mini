@@ -9,7 +9,7 @@ from typing_extensions import TypedDict
 from pydantic import BaseModel, Field
 from operator import add
 
-from typing import List, Literal, Dict, Any, Optional, Annotated
+from typing import List, Literal, Dict, Any, Optional, Annotated, Tuple
 import numpy as np
 import textwrap
 
@@ -28,91 +28,12 @@ from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.metrics.pairwise import cosine_similarity
 
 from llama_index.core.vector_stores import MetadataFilter, MetadataFilters, FilterOperator
-from langchain_core.prompts import PromptTemplate
+
 from langchain_core.runnables import RunnableLambda
 
-from registry import classify_and_subqueries_prompt
+from registry import classify_and_subqueries_prompt, GROUNDED_PROMPT
 
-GROUNDED_PROMPT = PromptTemplate.from_template(
-    """Du er en hjelpsom rådgiver og skal svare på norsk (bokmål).
-Du MÅ følge reglene under nøyaktig.
 
-VIKTIGE PRINSIPPER:
-- Du kan KUN bruke informasjon fra 'context' (nedenfor). Ikke legg til forklaringer, tall, vurderinger eller råd som ikke står direkte i context.
-- Ikke legg til egne meninger, tolkninger eller ekstra advarsler hvis de ikke står ordrett eller entydig i context.
-
-UTDATAFORMAT (SVÆRT VIKTIG):
-Du MÅ returnere gyldig JSON som matcher den eksakte Pydantic-skjema-strukturen 'GroundedAnswer':
-
-{{
-  "answer": str,
-  "claims": [
-    {{
-      "claim": str,
-      "validity": "valid" eller "not valid",
-      "Citations": [
-        {{
-          "url": str,
-          "quote": str
-        }}
-      ]
-    }}
-  ]
-}}
-
-- "answer":
-  En sammenhengende besvarelse på spørsmålet, skrevet vennlig og tydelig, MEN KUN basert på det som faktisk står i context.
-  Ikke ta med informasjon som ikke kan støttes direkte av context.
-  Ikke ta med informasjon som du ikke kan sitere fra context i etterkant.
-
-- "claims":
-  En liste av påstander som du har hentet ut fra "answer".
-  Hver claim må være ÉN klar setning.
-  Hver claim må handle om ÉN konkret idé.
-  Hver claim må være noe som faktisk er uttrykt (eller entydig sagt) i context.
-
-  For hver claim skal du også sette:
-    - "validity":
-        * "valid" hvis context direkte støtter denne påstanden.
-        * "not valid" hvis påstanden ikke kan bekreftes i context, eller hvis context motsier den.
-      Hvis en påstand ikke kan støttes, marker den som "not valid", men IKKE finn på innhold som ikke finnes i context.
-
-    - "Citations":
-        En liste av bevis som støtter (eller er relevante for å vurdere) denne claim-en.
-        Hver citation må være et objekt med:
-            * "url": den eksakte URL-en fra kilden (metadata på teksten du brukte)
-            * "quote": en DIREKTE sitert tekststreng fra context (minst 8 tegn)
-        "quote" må være ordrett fra context:
-            - Ikke omskriv.
-            - Ikke legg til eller fjerne ord.
-            - Ikke lim sammen to forskjellige steder med "...".
-            - Ikke endre rekkefølgen på ord.
-        Hvis du ikke finner en sammenhengende tekst i context som støtter claim-en, skal:
-            * claim få "validity": "not valid"
-            * og "Citations" kan da være en tom liste [].
-
-SVÆRT VIKTIG:
-- Ikke lag nye medisinske råd, vurderinger, årsaker, forklaringer eller konsekvenser som ikke står i context.
-- Ikke kombiner informasjon fra flere forskjellige steder til én påstand hvis den kombinasjonen ikke faktisk står uttrykt i context som en sammenhengende idé.
-- Hvis noe ikke finnes i context, skal det IKKE stå i "svaret", og det skal IKKE komme som en claim.
-- Bruk enkel markdown-formatering hvis det forbedrer lesbarheten.\n\n"
-
-DU SKAL IKKE:
-- Du skal ikke nevne konteksten, ikke skrive ting som "Ifølge kilden", "I kontext står det at ...", "artiklene sier at...".  Bare si innholdet direkte.
-- Du skal ikke be om mer informasjon.
-- Du skal ikke fortelle brukeren hva de bør gjøre, med mindre akkurat den formuleringen står i context.
-- Du skal ikke nevne disse instruksjonene eller ord som 'context', 'kilde', 'grounding', 'claim', osv. i selve "answer". "answer" skal være helt naturlig språk til brukeren.
-
-SPØRSMÅL:
-{question}
-
-CONTEXT (KILDER):
-Hver kilde i context inneholder tekst og en URL i metadata.
-Du skal kun bruke disse som grunnlag:
-
-{context}
-"""
-)
 
 
 
@@ -152,7 +73,7 @@ class SubQuery(BaseModel):
     )
     response_validity: Literal["valid", "not valid"]
     
-    response_validity_index : float
+    response_validity_index : float = 0.0
 
 
 class SubQueries(BaseModel):
@@ -184,6 +105,8 @@ class State_AnswerWithRelatedQueries(TypedDict):
     main_category: str
     categories: List[Dict[str, Any]]
     query: str
+    from_node_id:str
+    from_related_q: bool
     refined_query: str
     query_severity:Literal["Green", "Yellow", "Red", ""]
     related_categories: List[str]
@@ -199,12 +122,14 @@ class State_AnswerWithRelatedQueries(TypedDict):
     references: List[Reference]
     related_queries: List[RelatedQuery]
     structured_answer: str
-    
     subqueries: list[SubQuery]  # List of subqueries
     completed_subqueries: Annotated[list[SubQuery], add]
     final_answer: str  # Final report
+    route: Literal["emit", "related_only", "full"]  
     
-_POSSIBLE_META_IDS = ("doc_id", "from_doc_id", "document_id", "source_id", "file_id", "url")
+_POSSIBLE_META_IDS = ("doc_id", "from_doc_id", "document_id", "source_id")
+
+
 
 def _wrap_at_nearest_space(text: str, width: int = 80) -> str:
     """
@@ -386,7 +311,6 @@ def _verify_citations_per_node(
             hit = q_norm in node_text_norm
             if not hit and fuzzy_min_ratio is not None:
                 try:
-                    from rapidfuzz.fuzz import partial_ratio
                     hit = partial_ratio(q_norm, node_text_norm) >= fuzzy_min_ratio
                     print(f'------------->partial_ratio found hit for the citation:{q_norm}<---------------------')
                 except Exception:
@@ -414,7 +338,7 @@ def _verify_citations_per_node(
         "matches_by_citation": matches_by_citation,
     }
     
-    from typing import Any, Dict, List, Optional, Tuple
+
 from pydantic import BaseModel
 
 def _verify_claims(
@@ -584,7 +508,6 @@ def _verify_claims(
         # Add to global problems
         global_problems.extend(per_claim_problems)
         
-        print(claims_report)
 
     return {
         "global_problems": global_problems,
@@ -652,9 +575,6 @@ def _classify_relevancy(score: float, thresholds: dict[str, float]) -> str:
         return "Rejected"
     return "Rejected"
 
-def _mode_router(s: State_AnswerWithRelatedQueries) -> str:
-    return "related_only" if s.get("related_only") else "full"
-
 
 def _build_category_index(categories: List[Dict[str, Any]]) -> Dict[str, Dict[str, Any]]:
     return {c["name"]: c for c in categories}
@@ -716,6 +636,113 @@ def _build_related_queries_retriever(index_qa_bank, *, top_k, cutoff, query_seve
         filters=composite,
     )
     
+def _mode_router(state: State_AnswerWithRelatedQueries) -> str:
+    # value set by maybe_use_related_q
+    print(f'State route:<{state["route"]}>')
+    r = state.get("route")
+    if r in ("emit", "related_only", "full"):
+        return r
+    return "related_only" if state.get("related_only") else "full"
+
+
+def _fetch_answer_from_related_question(
+    node_id: str,
+    index: Optional[VectorStoreIndex] = None,
+    index_qa: Optional[VectorStoreIndex] = None,
+
+) -> Optional[Tuple[str, List[Reference], str, str]]:
+    """
+    Look up a Q→A hit for `query`. If the top-scored node has an 'answer' in metadata
+    and its score >= `score_threshold`, return (answer, refs). Otherwise return None.
+    """
+
+    
+    ds_qa = index_qa.storage_context.docstore
+    ds = index.storage_context.docstore
+    
+    qa_node = ds_qa.get_node(node_id)
+    
+
+    # Best-scored node
+    meta = getattr(qa_node, "metadata", {}) or {}
+    answer = meta.get("answer", "")
+    url = meta.get("url", "")
+    # from_doc_id = meta.get("from_doc_id", "")
+    
+    # if from_doc_id:
+    #     text_node = ds.get_node(from_doc_id)
+    #     print(f'FOUND TEXTNODE')
+    #     if text_node:
+    #         text_meta = getattr(text_node, "metadata", {}) or {}
+    #         title = text_meta.get("title", "")
+    
+
+    title = url
+    
+    category = meta.get("category", "")
+    severity = meta.get("severity", "Green")
+    print(f'node:<{qa_node}><{answer}><{title}>')
+
+
+    if not answer :
+        print('return no answer')
+        return None
+
+    # Build refs from top few
+    refs: List[Reference] = []
+    # for nws in nodes[:5]:
+    #     n = getattr(nws, "node", nws)
+    #     m = getattr(n, "metadata", {}) or {}
+    
+    ## TODO: qa-bank must store title for the url-doc the question is about
+    
+    refs.append({
+        "name": url,
+        "url": title,
+        "relevancy_index": 0.0,
+    })
+    print(f'found answer and refs{answer}, {refs}')
+    return answer, refs, category, severity
+    
+def maybe_use_related_q(state: State_AnswerWithRelatedQueries):
+    """
+    If from_related_q is True, try to answer directly from the Q→A index.
+    On hit -> return final_answer/references and route='emit'.
+    Otherwise route to related_only or full.
+    """
+    try:
+        if state.get("from_related_q"):
+            retr = state.get("retriever_related_queries")
+            idx = state.get("index")
+            idx_qa = state.get("index_related_queries")
+            
+            result = _fetch_answer_from_related_question(
+                node_id=state["from_node_id"],
+                index = idx,
+                index_qa=idx_qa,
+            )
+            if result:
+                answer, refs, category, severity = result
+                # IMPORTANT: return the updates; do not mutate `state`
+                return {
+                    "final_answer": answer,
+                    "references": refs,
+                    "main_category": category,
+                    "query_severity": severity,
+                    "route": "emit",
+                }
+
+        # no fast hit; decide normal route
+        return {
+            "route": "related_only" if state.get("related_only") else "full"
+        }
+
+    except Exception as e:
+        logging.error(f"maybe_use_related_q error: {e}")
+        return {
+            "route": "related_only" if state.get("related_only") else "full"
+        }
+    
 # Nodes
 def orchestrator(state: State_AnswerWithRelatedQueries):
     """Orchestrator that generates a plan for solving the question"""
@@ -744,59 +771,6 @@ def orchestrator(state: State_AnswerWithRelatedQueries):
             "query_severity": report_queries.query_severity,
             "related_categories": related_categories}
 
-def llm_call(state: WorkerState):
-    """Worker answers a subquery using the relevant index"""
-    writer = get_stream_writer()  
-    writer({"event": "info", "message" : f"Worker answers the subquery \"{state['subquery'].subquery}\""}) 
-    
-    query_engine = state["query_engine"]
-    
-    response_obj = query_engine.query(state['subquery'].subquery)
-    
-    cutoff = state["similarity_cutoff"]
- 
-    refs: List[Reference] = []
-
-    
-    thresholds = state.get("relevancy_thresholds", {
-        "strong": 0.60,
-        "medium": 0.55,   # anything below = Rejected
-        "weak":   0.35,   # anything below = Rejected
-    })
-
-
-
-    nodes = [n for n in response_obj.source_nodes if n.score is not None]
-    if not nodes:
-        vector_index_desc = state["vector_index_description"]
-        feedback = (f"Jeg beklager! {vector_index_desc}. "
-                    f"Hvis du har spørsmål om disse emnene, kan jeg prøve å hjelpe.")
-        return {}
-    best = max(nodes, key=lambda n: n.score)
-    
-    band = _classify_relevancy(best.score, thresholds)
-    
-    logging.info(f"Band: {band} for {state['subquery'].subquery}, best score: {best}")
-    
-    for node in response_obj.source_nodes [:5]:
-        if node.score is not None:
-            meta = node.metadata
-            refs.append({
-                "name": meta.get('title', 'Ingen tittel').lstrip(),
-                "url": meta.get('url', 'Ingen URL'),
-                "relevancy_index": node.score
-            })
-    state['subquery'].response_validity_index = best.score
-    if (band != "Rejected"):
-        state['subquery'].response_validity = "valid"
-        state['subquery'].references = refs
-        state['subquery'].answer = response_obj.response
-    else: 
-        state['subquery'].response_validity = "not valid"
-        state['subquery'].answer = "Jeg beklager, men jeg kan bare svare på spørsmål basert på den gitte konteksten"
-
-        
-    return {}
 
 def query_grounded(state: WorkerState) -> dict:
     writer = get_stream_writer()
@@ -809,18 +783,6 @@ def query_grounded(state: WorkerState) -> dict:
         # 1) Retrieve NodeWithScore objects
         nodes = retriever.retrieve(question) or []
 
-        # 2) Build a pretty list only for logging/debug (OPTIONAL)
-        nodes_pretty = []
-        for nws in nodes:
-            node_obj = getattr(nws, "node", nws)
-            meta = getattr(node_obj, "metadata", {}) or {}
-            nodes_pretty.append({
-                "id": _preferred_display_id(node_obj),
-                "url": meta.get("url", ""),
-                "title": meta.get("title", ""),
-                "score": getattr(nws, "score", None),
-            })
-
         # 3) Validity check based on best score
         thresholds = state.get("relevancy_thresholds", {
             "strong": 0.60,
@@ -829,22 +791,21 @@ def query_grounded(state: WorkerState) -> dict:
         })
 
         # Only consider nodes that actually have a numeric score
-        scored_nodes = [n for n in nodes if getattr(n, "score", None) is not None]
-        if not scored_nodes:
+        if not nodes:
             # no scored nodes at all
             state["subquery"].response_validity = "not valid"
             state["subquery"].answer = ("Jeg beklager, men jeg kan bare svare på spørsmål basert på den gitte "
                                         "konteksten")
             return {"completed_subqueries": [state["subquery"]]}
 
-        best_nws = max(scored_nodes, key=lambda n: n.score)  # <- n is NodeWithScore
+        best_nws = max(nodes, key=lambda n: n.score)  # <- n is NodeWithScore
         best_score = float(getattr(best_nws, "score", 0.0))
         band = _classify_relevancy(best_score, thresholds)
         logging.info(f"Band: {band} for {question}, best score: {best_score:.3f}")
 
         # Build refs from the top few scored nodes
         refs: List[Reference] = []
-        for nws in scored_nodes[:5]:
+        for nws in nodes[:5]:
             node_obj = getattr(nws, "node", nws)
             meta = getattr(node_obj, "metadata", {}) or {}
             refs.append({
@@ -860,7 +821,8 @@ def query_grounded(state: WorkerState) -> dict:
             state['subquery'].answer = ("Jeg beklager, men jeg kan bare svare på spørsmål basert på den gitte "
                                         "konteksten")
             return {"completed_subqueries": [state["subquery"]]}
-
+        
+        # -----------------------------------------------------------------------------------------------
         # 4) Build grounded context from the ORIGINAL nodes (not the dicts)
         ctx = _format_context_from_nodes(nodes)
 
@@ -1038,15 +1000,31 @@ def related_queries_and_categories(state: State_AnswerWithRelatedQueries) -> dic
         candidates = []
     
         for r in results[:5]:
-            text = r.node.get_text()
-            sev = r.node.metadata.get("severity", "")
-            cat = r.node.metadata.get("category", "")
-            doc_id = r.node.metadata.get("from_doc_id", r.node.node_id)  # fallback if missing
-            score = r.score
-            #logging.info(f'candidate query: {text} | cat: {cat} | sev: {sev} | id: {doc_id}  | score: {score} ')
-            candidates.append({"id": str(doc_id), "text": text, "severity": sev})
+            node = getattr(r, "node", r)  # NodeWithScore -> TextNode
+            meta = getattr(node, "metadata", {}) or {}
+
+            text = _node_text(node)
+            # Use your helper to collect possible ids (metadata ids + id_/node_id)
+   
+            node_id = getattr(node, "node_id", getattr(node, "id_", ""))
+
+            sev = meta.get("severity", "")
+            cat = meta.get("category", "")
+            # Prefer from_doc_id, fallback to node_id / id_
+            doc_id = meta.get("from_doc_id", getattr(node, "node_id", getattr(node, "id_", "")))
+            score = float(getattr(r, "score", 0.0) or 0.0)
+
+            candidates.append({
+                "id": str(doc_id),
+                "node_id": node_id,
+                "text": text,
+                "severity": sev,
+                # keep if you want to inspect:
+                # "score": score,
+                # "category": cat,
+            })
     
-        related_queries = [{"keyword": s.get("severity", ""), "query": s["text"]} for s in candidates]
+        related_queries = [{"keyword": s.get("severity", ""), "query": s.get("text",""), "node_id": s.get("node_id", "")} for s in candidates]
 
         related_queries_payload = json.dumps(related_queries, ensure_ascii=False)
 
@@ -1065,7 +1043,7 @@ def synthesizer(state: State_AnswerWithRelatedQueries):
     
     writer = get_stream_writer()  
     writer({"event": "info", "message":"Synthesize full answer"}) 
-    print("Synthesize full answer")
+
     
     llm = state["llm"]
     
@@ -1094,10 +1072,6 @@ def synthesizer(state: State_AnswerWithRelatedQueries):
             else:
                 completed_report_answers_non_valid+=f'\n\nBeklager, men jeg kunne ikke svare på spørsmålet : \"{s.subquery}\"'
                 combined_debug+=f'\n\nBeklager, men jeg kunne ikke svare på spørsmålet : \"{s.subquery}\"'
-        print(f'<+++++++++++++++++++++++++++++++++++++++++++')
-        print(f's: <<{s}>>')
-        print(f'combined_debug: <<{completed_report_answers}>>')
-        print(f'+++++++++++++++++++++++++++++++++++++++++++>')
 
         if completed_report_answers:
             aggregated_answer = llm.invoke(
@@ -1249,21 +1223,28 @@ def assign_workers(state: State_AnswerWithRelatedQueries):
 builder = StateGraph(State_AnswerWithRelatedQueries)
 
 # Add the nodes
+builder.add_node("maybe_use_related_q", maybe_use_related_q)
 builder.add_node("orchestrator", orchestrator)
 builder.add_node("query_grounded", query_grounded)
 builder.add_node("synthesizer", synthesizer, join=True)
 builder.add_node("emit_query_answer_references", emit_query_answer_references)
 builder.add_node("related_queries_and_categories", related_queries_and_categories)
 
-# Add edges to connect nodes
+
+# Correct start chain:
+builder.add_edge(START, "maybe_use_related_q")
 builder.add_conditional_edges(
-    START,
+    "maybe_use_related_q",
     _mode_router,
     {
+        "emit": "emit_query_answer_references",
         "related_only": "related_queries_and_categories",
         "full": "orchestrator",
     },
 )
+
+
+
 builder.add_conditional_edges(
     "orchestrator", assign_workers, ["query_grounded"]
 )

@@ -231,3 +231,6 @@ Download the containers:
 ## kjøre build index under utils:
 # C:\Users\ChristianGoulignac\vscode\llama
 .\llama_chatbot_server_mini\.venv\Scripts\python.exe -m llama_chatbot_server_mini.utils.create_vectorindex.build_hei_index
+
+## Kjøre testene
+python -m test.data.batch_answer_to_excel --input test/data/sample_questions.json --out test/data/answers.xlsx --vector-index hvaerinnafor
