@@ -35,6 +35,8 @@ logging.basicConfig(
 # 5) Initialize and run workflow
 init_state: State_buildIndex = {
     "llm": LLMGPT4,
+    "similarity_top_k" : 10,
+    "similarity_cutoff" : 0.75,
     "content_type": "html_content",
     "name": "hvaerinnafor",
     "name_questions_answered": "hvaerinnafor_question_bank",

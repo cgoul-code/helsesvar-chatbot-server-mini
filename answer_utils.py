@@ -400,6 +400,8 @@ async def get_answer_with_related_queries_as_stream(
         "retriever_related_queries": retriever_related_queries,
         "vector_index_description": vector_index_description,
         "query": query_settings.user_content,
+        "from_node_id": query_settings.from_node_id,
+        "from_related_q": query_settings.from_related_q,
         "similarity_cutoff": query_settings.similarity_cutoff,
         "similarity_top_k": query_settings.similarity_top_k,
         "relevancy_cutoff" : query_settings.relevancy_cutoff,
@@ -414,6 +416,7 @@ async def get_answer_with_related_queries_as_stream(
         "references": [],
         "structured_answer": "",
         "completed_subqueries": [],
+        "route":""
     }
 
 
