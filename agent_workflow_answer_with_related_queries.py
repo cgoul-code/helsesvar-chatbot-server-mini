@@ -319,7 +319,6 @@ def _verify_citations_per_node(
             if hit:
                 found_in_any = True
                 
-                print(f'¤¤¤Fikk hit for {q_norm} for {url}')
                 matches_by_citation.setdefault(i, []).append(node_obj)
                 key = _node_identity(node_obj)
                 if key not in seen_nodes:
@@ -330,7 +329,6 @@ def _verify_citations_per_node(
 
         if not found_in_any:
             problems.append(f"citation[{i}]: quote not found in any node: {q_raw!r}")
-            print(f'¤¤¤¤Fikk IKKE hit for {q_norm}')
 
     return {
         "problems": problems,
@@ -638,7 +636,6 @@ def _build_related_queries_retriever(index_qa_bank, *, top_k, cutoff, query_seve
     
 def _mode_router(state: State_AnswerWithRelatedQueries) -> str:
     # value set by maybe_use_related_q
-    print(f'State route:<{state["route"]}>')
     r = state.get("route")
     if r in ("emit", "related_only", "full"):
         return r
@@ -681,7 +678,7 @@ def _fetch_answer_from_related_question(
     
     category = meta.get("category", "")
     severity = meta.get("severity", "Green")
-    print(f'node:<{qa_node}><{answer}><{title}>')
+
 
 
     if not answer :
@@ -701,7 +698,7 @@ def _fetch_answer_from_related_question(
         "url": title,
         "relevancy_index": 0.0,
     })
-    print(f'found answer and refs{answer}, {refs}')
+
     return answer, refs, category, severity
     
 def maybe_use_related_q(state: State_AnswerWithRelatedQueries):
@@ -894,8 +891,13 @@ def query_grounded(state: WorkerState) -> dict:
             for cit in citations_report:
                 cit_i = cit["citation_index"]
                 found_in_nodes = cit["found_in_nodes"]
-                url_val = cit["url"] or "Ingen URL"
-                url_str = f"[{url_val}]({url_val})"
+                urls = cit["matched_node_urls"]
+                url_str = ""
+                for i, u in enumerate(urls):
+                    url_val = u or "Ingen URL"
+                    url_str += f"[{url_val}]({url_val}) \n"
+                    print(f'url val:{url_val}')
+                    
                 quote_val = cit["quote"] or ""
 
                 short_quote = quote_val.strip()
