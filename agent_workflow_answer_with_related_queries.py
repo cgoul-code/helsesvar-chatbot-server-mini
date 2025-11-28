@@ -217,12 +217,19 @@ _TRANSLATE = str.maketrans({
     "\u202F": " ",  # NNBSP
 })
 _ZERO_WIDTH = dict.fromkeys(map(ord, ["\u200B", "\u200C", "\u200D", "\u2060"]), None)
+_CONTROL_CHARS = dict.fromkeys(range(0x00, 0x20), None)
 
 def _normalize(s: str, *, collapse_ws: bool = True, case_sensitive: bool = False) -> str:
     if not s:
         return ""
     s = unicodedata.normalize("NFKC", s)
-    s = s.translate(_TRANSLATE).translate(_ZERO_WIDTH)
+    # 1) Normaliser typografiske tegn
+    s = s.translate(_TRANSLATE)
+    # 2) Fjern zero-width
+    s = s.translate(_ZERO_WIDTH)
+    # 3) Fjern kontrolltegn (inkl. \x00)
+    s = s.translate(_CONTROL_CHARS)
+    # 4) Kollaps mellomrom
     if collapse_ws:
         s = _WS.sub(" ", s)
     return s if case_sensitive else s.casefold()
@@ -276,65 +283,77 @@ def _verify_citations_per_node(
     matched_nodes_ordered: List[Any] = []
     seen_nodes: set[str] = set()
 
-    # Pre-normalize node texts once
-    norm_nodes = []
-    for nws in nodes:
-        text_raw = _node_text(nws)
-        text_norm = _normalize(text_raw, collapse_ws=collapse_whitespace, case_sensitive=case_sensitive)
-        norm_nodes.append((nws, text_norm))
+    try: 
+        # Pre-normalize node texts once
+        norm_nodes = []
+        for nws in nodes:
+            text_raw = _node_text(nws)
+            text_norm = _normalize(text_raw, collapse_ws=collapse_whitespace, case_sensitive=case_sensitive)
+            norm_nodes.append((nws, text_norm))
 
-    # If no text at all but we have citations
-    if citations and not any(t for _, t in norm_nodes):
-        return {
-            "problems": [f"citation[{i}]: no retrieved text available" for i, _ in enumerate(citations)],
-            "matched_nodes": [],
-            "matches_by_citation": {},
-        }
+        # If no text at all but we have citations
+        if citations and not any(t for _, t in norm_nodes):
+            return {
+                "problems": [f"citation[{i}]: no retrieved text available" for i, _ in enumerate(citations)],
+                "matched_nodes": [],
+                "matches_by_citation": {},
+            }
 
-    # Check each citation against each node
-    for i, cit in enumerate(citations):
-        q_raw = (cit.quote or "").strip()
-        q_len_norm = len(_normalize(q_raw, collapse_ws=True, case_sensitive=True))
-        if q_len_norm < min_quote_chars:
-            problems.append(f"citation[{i}]: quote too short (<{min_quote_chars})")
-            continue
-
-        q_norm = _normalize(q_raw, collapse_ws=collapse_whitespace, case_sensitive=case_sensitive)
-
-        found_in_any = False
-        for node_obj, node_text_norm in norm_nodes:
-            meta = node_obj.metadata
-            url = meta.get('url', 'Ingen URL')
-            if not node_text_norm:
+        # Check each citation against each node
+        for i, cit in enumerate(citations):
+            print(f'--->original sitat:<{cit}>')
+            q_raw = (cit.quote or "").strip()
+            q_len_norm = len(_normalize(q_raw, collapse_ws=True, case_sensitive=True))
+            if q_len_norm < min_quote_chars:
+                problems.append(f"citation[{i}]: quote too short (<{min_quote_chars})")
                 continue
 
-            hit = q_norm in node_text_norm
-            if not hit and fuzzy_min_ratio is not None:
-                try:
-                    hit = partial_ratio(q_norm, node_text_norm) >= fuzzy_min_ratio
-                    print(f'------------->partial_ratio found hit for the citation:{q_norm}<---------------------')
-                except Exception:
-                    hit = False
+            q_norm = _normalize(q_raw, collapse_ws=collapse_whitespace, case_sensitive=case_sensitive)
 
-            if hit:
-                found_in_any = True
-                
-                matches_by_citation.setdefault(i, []).append(node_obj)
-                key = _node_identity(node_obj)
-                if key not in seen_nodes:
-                    seen_nodes.add(key)
-                    matched_nodes_ordered.append(node_obj)
+            found_in_any = False
+            for node_obj, node_text_norm in norm_nodes:
+                meta = node_obj.metadata
+                url = meta.get('url', 'Ingen URL')
+                print(f'1 {q_raw}')
+                if not node_text_norm:
+                    continue
+                print('2')
+                hit = q_norm in node_text_norm
+                print(f'3: fuzzy_min_ratio {hit} {fuzzy_min_ratio}')
+                if (not hit) and (fuzzy_min_ratio is not None):
+                    print('3.1')
+                    try:
+                        ratio = partial_ratio(q_norm, node_text_norm )
+                        hit = ratio >= fuzzy_min_ratio
+                        print(f'------------->partial_ratio found hit for the citation:{q_norm}<---------------------')
+                        print(f'hit: {hit}{ratio}')
+                        print(f'------------->with text node: {node_text_norm}<------')
+                    except Exception:
+                        hit = False
+                print('4')
+                if hit:
+                    found_in_any = True
                     
-                break # go to next citation
+                    matches_by_citation.setdefault(i, []).append(node_obj)
+                    key = _node_identity(node_obj)
+                    if key not in seen_nodes:
+                        seen_nodes.add(key)
+                        matched_nodes_ordered.append(node_obj)
+                        
+                    break # go to next citation
 
-        if not found_in_any:
-            problems.append(f"citation[{i}]: quote not found in any node: {q_raw!r}")
-
+            if not found_in_any:
+                problems.append(f"citation[{i}]: quote not found in any node: {q_raw!r}")
+                
+    except Exception as e:
+        logging.error(f"_verify_citations_per_node error: {e}")
+        
     return {
         "problems": problems,
         "matched_nodes": matched_nodes_ordered,
         "matches_by_citation": matches_by_citation,
     }
+
     
 
 from pydantic import BaseModel
@@ -610,10 +629,21 @@ def _build_related_queries_retriever(index_qa_bank, *, top_k, cutoff, query_seve
     else:
         allowed_sev = ["Green", "Yellow", "Red"]
 
+
     filters_list = [
-        # one flat filter using IN — no nested MetadataFilters
-        MetadataFilter(key="severity", value=allowed_sev, operator=FilterOperator.IN)
-    ]
+        # # Include only nodes explicitly marked valid = True
+        MetadataFilter(
+            key="valid",
+            value=1,
+            operator=FilterOperator.EQ,
+        ),
+        MetadataFilter(
+            key="severity",
+            value=allowed_sev,
+            operator=FilterOperator.IN,
+        ),
+    ]    
+    
 
     # Optional category
     if main_category:
@@ -745,28 +775,41 @@ def orchestrator(state: State_AnswerWithRelatedQueries):
     """Orchestrator that generates a plan for solving the question"""
     writer = get_stream_writer()  
     writer({"event": "info", "message":"Orchestrator that generates a plan for solving the question"})
-      
-    # Generate queries
-    llm = state["llm"]
+    try:
+        # Generate queries
+        llm = state["llm"]
+            
+        categories_json = json.dumps(state["categories"], ensure_ascii=False, indent=2)
         
-    categories_json = json.dumps(state["categories"], ensure_ascii=False, indent=2)
-    
-    prompt = classify_and_subqueries_prompt(query=state["query"], categories=categories_json)
-        
-    # Augment the LLM with schema for structured output
-    planner = llm.with_structured_output(SubQueries)
+        prompt = classify_and_subqueries_prompt(query=state["query"], categories=categories_json)
+            
+        # Augment the LLM with schema for structured output
+        planner = llm.with_structured_output(SubQueries)
 
-    report_queries = planner.invoke(
-        prompt
-    )
-    
-    cat_name = report_queries.main_category
-    related_categories = _get_related_category_names(state["categories"], cat_name) if cat_name != "Ukjent" else []
-    
-    return {"subqueries": report_queries.subqueries, 
-            "main_category": report_queries.main_category, 
-            "query_severity": report_queries.query_severity,
-            "related_categories": related_categories}
+
+        report_queries = planner.invoke(
+            prompt
+        )
+        
+        cat_name = report_queries.main_category
+        related_categories = _get_related_category_names(state["categories"], cat_name) if cat_name != "Ukjent" else []
+        
+        return {"subqueries": report_queries.subqueries, 
+        "main_category": report_queries.main_category, 
+        "query_severity": report_queries.query_severity,
+        "related_categories": related_categories}
+        
+    except Exception as e:
+        logging.error(f"Failed to execute agent: {e}")
+            
+        # Trygg fallback så resten av grafen ikke krasjer
+        return {
+            "subqueries": [],
+            "main_category": "Ukjent",
+            "query_severity": "",
+            "related_categories": [],
+        }
+
 
 
 def query_grounded(state: WorkerState) -> dict:
@@ -830,7 +873,7 @@ def query_grounded(state: WorkerState) -> dict:
         )
         ga: GroundedAnswer = chain.invoke({})
         
-
+        print(f'ga: {ga}')
         # 5) Validate claims against the ORIGINAL nodes
         #
         results = _verify_claims(
@@ -896,7 +939,7 @@ def query_grounded(state: WorkerState) -> dict:
                 for i, u in enumerate(urls):
                     url_val = u or "Ingen URL"
                     url_str += f"[{url_val}]({url_val}) \n"
-                    print(f'url val:{url_val}')
+                    #print(f'url val:{url_val}')
                     
                 quote_val = cit["quote"] or ""
 
@@ -1076,6 +1119,7 @@ def synthesizer(state: State_AnswerWithRelatedQueries):
                 combined_debug+=f'\n\nBeklager, men jeg kunne ikke svare på spørsmålet : \"{s.subquery}\"'
 
         if completed_report_answers:
+            print(f"--->Agregerer disse svarene:{completed_report_answers}")
             aggregated_answer = llm.invoke(
                 [
                     SystemMessage(
@@ -1089,14 +1133,14 @@ def synthesizer(state: State_AnswerWithRelatedQueries):
                             "- Slå sammen overlappende eller gjentatte poenger fra de gitte del-svarene til et ryddig og lettlest sammendrag.\n"
                             "- Behold det faktiske innholdet og tonen nøyaktig slik de er skrevet.\n"
                             "- Ikke legg til nye påstander, tolkninger eller veiledning.\n"
-                            "- Hvis alle del-svarene sier «Det vet jeg ikke basert på kildene.», skal det endelige svaret **kun** gjenta det.\n\n"
+                            #"- Hvis alle del-svarene i \"completed_report_answers\" sier: «Det vet jeg ikke basert på kildene.», skal det endelige svaret **kun** gjenta det.\n\n"
 
                             "**Retningslinjer for tone og stil (må følges):**\n\n"
                             
                             "1. **Empati:** Tonen skal være rolig, vennlig og støttende — men du kan bare uttrykke empati dersom det allerede finnes i den gitte teksten. "
                             "Ikke finn på nye følelsesmessige eller motiverende utsagn.\n\n"
                             
-                            "2. **Ungdomsvennlig språk (13–19 år):**\n"
+                            "2. **Ungdomsvennlig språk (13-19 år):**\n"
                             "- Bruk et klart og naturlig språk med korte setninger.\n"
                             "- Unngå medisinske faguttrykk, med mindre de allerede finnes i teksten.\n"
                             "- Ikke utvid eller forklar begreper utover det som står skrevet.\n\n"
