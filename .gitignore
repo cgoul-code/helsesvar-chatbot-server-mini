@@ -17,6 +17,10 @@ garbage
 
 blobstorage/chatbot/*/*.json
 
+vector-index/*
+
+storage/*
+
 # Python-specific exclusions
 __pycache__/
 *.pyc

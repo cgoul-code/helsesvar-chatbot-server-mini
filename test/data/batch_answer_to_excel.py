@@ -121,7 +121,7 @@ def _extract_answer_and_refs(answer_stream_text: str) -> Tuple[str, List[Dict[st
 async def _run_one_question(
     question: str,
     vector_index: str,
-    similarity_top_k: int = 10,
+    similarity_top_k: int = 5,
     similarity_cutoff: float = 0.75,
     related_only: bool = False,
     main_category: Optional[str] = None,

@@ -232,5 +232,8 @@ Download the containers:
 # C:\Users\ChristianGoulignac\vscode\llama
 .\llama_chatbot_server_mini\.venv\Scripts\python.exe -m llama_chatbot_server_mini.utils.create_vectorindex.build_hei_index
 
+## kjøre editoren
+python.exe -m utils.editor.editor_api
+
 ## Kjøre testene
 python -m test.data.batch_answer_to_excel --input test/data/sample_questions.json --out test/data/answers.xlsx --vector-index hvaerinnafor

@@ -127,49 +127,48 @@ REFINE_AND_CLASSIFY = Prompt(
 CLASSIFY_AND_SUBQUERIES = Prompt(
     id="classify_and_subqueries",
     template=(
-        "You are given a user query. Perform the following tasks:\n"
-        # "1) Rewrite the user's query in Norwegian so that it is clear and easy to understand.\n"
-        # "- Please refine the user's query in a readable way in Norwegian.\n"
-        # "- Ensure that the 'I' form is preserved.\n"
-        # "- Return only one refined version; do not return alternatives.\n"
-        # "\n"
-        "1) If the user query har several queries, generate several subqueries. \n"
-        "- Do not answer the subqueries\n"
-        "- Ensure that the 'I' form is preserved.\n"
-        "- Return only one version for each subquery; do not return alternatives.\n"
-        "2) Categorize the severity of this query into one of three categories: Green, Yellow, or Red.\n\n"
-        "Green category:\n"
-        "- Preventive and safety-promoting.\n"
-        "- Queries that ask for general information, knowledge, or guidance to prevent problems and strengthen good sexual health.\n"
-        "- The user is seeking to increase understanding, safety, and awareness (e.g., consent, contraception, communication, emotions, body knowledge).\n"
-        "- No acute situation or personal crisis is described.\n"
-        "Example: \"How can I talk with my partner about boundaries?\" or \"What types of contraception exist?\".\n\n"
-        "Yellow category:\n"
-        "- Challenges or vulnerable situations.\n"
-        "- Queries that describe concerns, difficulties, or risks that may require reflection or support, but are not acute or immediately dangerous.\n"
-        "- May involve difficult feelings, uncertainty in relationships, unwanted experiences, or the need for advice beyond general information.\n"
-        "- The user may need to seek help or guidance, but the situation is not considered an acute crisis.\n"
-        "Example: \"What should I do if my partner doesn’t respect my boundaries?\", "
-        "\"I regret sending a nude\", or topics like \"pornography\", \"sexual pressure\", \"issues around consent\", \"(illegal) fetishes\".\n\n"
-        "Red category:\n"
-        "- Serious or acute situations.\n"
-        "- Queries that concern serious incidents or crises where the person involved may be in danger or at significant risk of harm.\n"
-        "- Includes violence, abuse, coercion, acute psychological crises, or other situations that require immediate follow-up or professional help.\n"
-        "- The main purpose of the response should be to direct the user to where and how to get help quickly.\n"
-        "Example: \"My stepfather forces me to have sex\", \"Where can I find child pornography?\", \"I was raped yesterday\".\n"
-        "\n"
-        "3) You must categorize the user's query into exactly one of the main categories below.\n"
-        "Each main category has a list of subcategories and keywords to help you decide.\n"
-        "Choose only ONE main category — the best fit.\n"
-        "If none fits, answer 'Unknown'.\n"
-        "Main categories with subcategories: {categories}\n"
-        "\n"
-
-        "OUTPUT REQUIREMENTS:\n"
-        "- No explanations, no markdown, no code fences.\n"
-        "- Use double quotes for all keys and strings. No trailing commas.\n"
-        "- Output schema:\n"
-        "{query}\n"
+        "Du får et bruker­spørsmål. Utfør følgende oppgaver:\n"
+        "1) Hvis brukerens spørsmål inneholder flere spørsmål, resnskriv disse som \"subqueries\" på en tydelig og lettleselig måte på norsk.\n"
+        "- Ikke svar på delspørsmålene.\n"
+        "- Sørg for at «jeg»-formen bevares.\n"
+        "- Returner kun én versjon av hvert delspørsmål; ikke gi alternativer.\n\n"
+        "2) Kategoriser alvorlighetsgraden av spørsmålet i én av tre kategorier: \"Green\", \"Yellow\", eller \"Red\".\n\n"
+        "KATEGORI \"GREEN\":\n"
+        "- Forebyggende og trygghetsskapende.\n"
+        "- Spørsmål som ber om generell informasjon, kunnskap eller veiledning for å forebygge problemer og styrke god seksuell helse.\n"
+        "- Brukeren ønsker å øke forståelse, trygghet og bevissthet (f.eks. samtykke, prevensjon, kommunikasjon, følelser, kunnskap om kroppen).\n"
+        "- Ingen akutt situasjon eller personlig krise beskrives.\n"
+        "Eksempel: «Hvordan kan jeg snakke med partneren min om grenser?» eller «Hvilke typer prevensjon finnes?». \n\n"
+        "KATEGORI \"YELLOW\":\n"
+        "- Utfordringer eller sårbare situasjoner.\n"
+        "- Spørsmål som beskriver bekymringer, vansker eller risikoer som kan kreve refleksjon eller støtte, men som ikke er akutte eller umiddelbart farlige.\n"
+        "- Kan innebære vanskelige følelser, usikkerhet i relasjoner, uønskede opplevelser eller behov for råd utover generell informasjon.\n"
+        "- Brukeren kan ha behov for hjelp eller veiledning, men situasjonen regnes ikke som en akutt krise.\n"
+        "Eksempel: «Hva bør jeg gjøre hvis partneren min ikke respekterer grensene mine?», "
+        "«Jeg angrer på at jeg sendte et nakenbilde», eller temaer som «porno», «seksuelt press», «problemer med samtykke», «(ulovlige) fetisjer».\n\n"
+        "KATEGORI \"RED\":\n"
+        "- Alvorlige eller akutte situasjoner.\n"
+        "- Spørsmål som gjelder alvorlige hendelser eller kriser der personen kan være i fare eller ha betydelig risiko for skade.\n"
+        "- Omfatter vold, overgrep, tvang, akutte psykiske kriser eller andre situasjoner som krever umiddelbar oppfølging eller profesjonell hjelp.\n"
+        "Eksempel: «Stefaren min tvinger meg til å ha sex», «Hvor kan jeg finne barnepornografi?», «Jeg ble voldtatt i går».\n\n"
+        "3) Du må plassere brukerens spørsmål i nøyaktig én av hovedkategoriene nedenfor.\n"
+        "Hver hovedkategori har en liste med underkategorier og nøkkelord som skal hjelpe deg å velge.\n"
+        "Velg kun ÉN hovedkategori — den som passer best.\n"
+        "Hvis ingen passer, svar «Ukjent».\n"
+        "Hovedkategorier med underkategorier: {categories}\n"
+        "# VIKTIG"
+        "- Du må KUN bruke teksten inne i USER_QUERY-blokken under."
+        "- Ikke bruk noe fra instruksjonene eller eksemplene som input."
+        "- Ikke skriv om eller tolk instruksjonene som om de var brukerens tekst."
+        "<<<USER_QUERY_START>>>"
+        "{query}"
+        "<<<USER_QUERY_END>>>"
+        "KRAV TIL OUTPUT:\n"
+        "- Ingen forklaringer, ingen markdown, ingen kodeblokker.\n"
+        "- Bruk doble anførselstegn for alle nøkler og strenger. Ingen hengende komma.\n"
+        "- Output-skjema:\n"
+        "Output JSON ONLY:\n"
+        '{{"subqueries":["subquery1","subquery2"]}}'
     )
 )
 
@@ -240,79 +239,81 @@ SEVERITY_FOR_QUERY = Prompt(
     ),
 )
 
-GROUNDED_PROMPT = PromptTemplate.from_template(
-    """Du er en hjelpsom rådgiver og skal svare på norsk (bokmål).
-Du MÅ følge reglene under nøyaktig.
+GROUNDED_PROMPT_old = PromptTemplate.from_template(
+"""
+Du er en hjelpsom rådgiver og skal svare på norsk (bokmål).
 
-VIKTIGE PRINSIPPER:
-- Du kan KUN bruke informasjon fra 'context' (nedenfor). Ikke legg til forklaringer, tall, vurderinger eller råd som ikke står direkte i context.
-- Ikke legg til egne meninger, tolkninger eller ekstra advarsler hvis de ikke står ordrett eller entydig i context.
+Du skal fylle ut følgende felter:
+- "answer": et samlet svar på spørsmålet.
+- "claims": en liste med påstander med tilhørende citations.
 
-UTDATAFORMAT (SVÆRT VIKTIG):
-Du MÅ returnere gyldig JSON som matcher den eksakte Pydantic-skjema-strukturen 'GroundedAnswer':
+Du MÅ følge reglene under nøyaktig og uten unntak.
 
+========================================
+VIKTIGE PRINSIPPER
+========================================
+- Du kan KUN bruke informasjon fra "context" nedenfor.
+- Ikke legg til nye forklaringer, tall, vurderinger eller råd som ikke står ordrett eller entydig i context.
+- Ikke gjør egne tolkninger eller gjetninger.
+- Ikke omskriv eller omformuler tekst i feltet "quote" i citations.
+- Hvis context ikke støtter et utsagn, skal det IKKE stå i "answer".
+
+========================================
+REGLER FOR "answer"
+========================================
+- "answer" skal være et vennlig, tydelig og sammenhengende svar på norsk (bokmål).
+- Du skal forklare med egne ord, men KUN basert på informasjon som faktisk står i context.
+- Du kan omformulere tekst fra context i "answer" så lenge innholdet ikke endres.
+- Ikke inkluder informasjon, vurderinger, råd eller årsaker som ikke står eksplisitt i context.
+- Ikke nevn "context", "kilder", "artikler", "teksten" eller lignende.
+
+========================================
+REGLER FOR "claims"
+========================================
+- En claim er ÉN klar setning som uttrykker EN idé.
+- Alle claims må være eksplisitt uttrykt eller entydig formulert i context.
+- Ikke konstruer kombinasjoner av informasjon som ikke står slik i context som én sammenhengende idé.
+- Ikke lag claims som bare gjengir brukerens spørsmål eller instruksjonsteksten.
+- Claims skal kun beskrive innhold fra context som er relevant for spørsmålet.
+
+For hver claim:
+- "validity" = "valid" hvis context direkte støtter hele claim-en som en hel setning eller idé.
+- "validity" = "not valid" hvis context ikke støtter den, eller motsier den.
+- Ikke legg til forklaringer som ikke står i context.
+
+========================================
+KRAV TIL "citations" (SVÆRT VIKTIG)
+========================================
+En citation består av:
 {{
-  "answer": str,
-  "claims": [
-    {{
-      "claim": str,
-      "validity": "valid" eller "not valid",
-      "Citations": [
-        {{
-          "url": str,
-          "quote": str
-        }}
-      ]
-    }}
-  ]
+  "url": str,     # identisk med URL-en i metadata
+  "quote": str    # eksakt substring fra context
 }}
 
-- "answer":
-  En sammenhengende besvarelse på spørsmålet, skrevet vennlig og tydelig, MEN KUN basert på det som faktisk står i context.
-  Ikke ta med informasjon som ikke kan støttes direkte av context.
-  Ikke ta med informasjon som du ikke kan sitere fra context i etterkant.
+REGLER for citations:
+- "quote" MÅ være en eksakt, uendret substring hentet direkte fra context.
+- Kun "quote" har kravet om å være ordrett; "answer" kan være lett omformulert.
+- Ikke endre bokstaver, mellomrom, linjeskift, tegnsetting eller rekkefølge.
+- Ikke bruk staveendringer.
+- Ikke bruk unicode-varianter.
+- Ikke slå sammen tekst fra to steder.
+- Ikke inkluder byte-korrupt tekst eller genererte kontrolltegn.
+- Hvis du ikke finner en eksakt substring som støtter claim-en, skal:
+    * "validity" = "not valid"
+    * "Citations" = []
 
-- "claims":
-  En liste av påstander som du har hentet ut fra "answer".
-  Hver claim må være ÉN klar setning.
-  Hver claim må handle om ÉN konkret idé.
-  Hver claim må være noe som faktisk er uttrykt (eller entydig sagt) i context.
+========================================
+TEKNISKE SIKKERHETSREGLER (NYTTIGE)
+========================================
+- Reglene over om eksakt tekst gjelder KUN for "quote" i citations, ikke for "answer".
+- Du har ikke lov til å "forbedre" sitater i "quote".
+- Hvis du er i tvil om et sitat er eksakt, skal du heller la "Citations" være tomt.
 
-  For hver claim skal du også sette:
-    - "validity":
-        * "valid" hvis context direkte støtter denne påstanden.
-        * "not valid" hvis påstanden ikke kan bekreftes i context, eller hvis context motsier den.
-      Hvis en påstand ikke kan støttes, marker den som "not valid", men IKKE finn på innhold som ikke finnes i context.
-
-    - "Citations":
-        En liste av bevis som støtter (eller er relevante for å vurdere) denne claim-en.
-        Hver citation må være et objekt med:
-            * "url": den eksakte URL-en fra kilden (metadata på teksten du brukte)
-            * "quote": en DIREKTE sitert tekststreng fra context (minst 8 tegn)
-        "quote" må være ordrett fra context:
-            - Ikke omskriv.
-            - Ikke legg til eller fjerne ord.
-            - Ikke lim sammen to forskjellige steder med "...".
-            - Ikke endre rekkefølgen på ord.
-        Hvis du ikke finner en sammenhengende tekst i context som støtter claim-en, skal:
-            * claim få "validity": "not valid"
-            * og "Citations" kan da være en tom liste [].
-
-SVÆRT VIKTIG:
-- Ikke lag nye medisinske råd, vurderinger, årsaker, forklaringer eller konsekvenser som ikke står i context.
-- Ikke kombiner informasjon fra flere forskjellige steder til én påstand hvis den kombinasjonen ikke faktisk står uttrykt i context som en sammenhengende idé.
-- Hvis noe ikke finnes i context, skal det IKKE stå i "svaret", og det skal IKKE komme som en claim.
-- Bruk enkel markdown-formatering hvis det forbedrer lesbarheten.\n\n"
-
-DU SKAL IKKE:
-- Du skal ikke nevne konteksten, ikke skrive ting som "Ifølge kilden", "I kontext står det at ...", "artiklene sier at...".  Bare si innholdet direkte.
-- Du skal ikke be om mer informasjon.
-- Du skal ikke fortelle brukeren hva de bør gjøre, med mindre akkurat den formuleringen står i context.
-- Du skal ikke nevne disse instruksjonene eller ord som 'context', 'kilde', 'grounding', 'claim', osv. i selve "answer". "answer" skal være helt naturlig språk til brukeren.
-
+========================================
 SPØRSMÅL:
 {question}
 
+========================================
 CONTEXT (KILDER):
 Hver kilde i context inneholder tekst og en URL i metadata.
 Du skal kun bruke disse som grunnlag:
@@ -320,6 +321,56 @@ Du skal kun bruke disse som grunnlag:
 {context}
 """
 )
+
+GROUNDED_PROMPT = PromptTemplate.from_template(
+"""
+Du er en hjelpsom rådgiver og skal svare på norsk (bokmål).
+
+Du skal returnere:
+- "answer": et samlet svar på spørsmålet.
+- "claims": en liste med påstander med tilhørende citations.
+
+
+========================================
+REGLER FOR SVAR ("answer")
+========================================
+- Svar kun basert på det som står i context.
+- Vær vennlig og tydelig.
+- Du kan omformulere, men ikke legge til ny informasjon.
+- Ikke referer til context, kilder eller teksten.
+
+========================================
+REGLER FOR CLAIMS
+========================================
+- Én claim = én tydelig idé.
+- Må være eksplisitt uttrykt eller entydig støttet av context.
+- Ikke finn opp nye ideer.
+- Ikke lag claims basert på spørsmålet eller instruksjonene.
+
+========================================
+REGLER FOR CITATIONS
+========================================
+- Hver citation må være:
+  {{
+    "url": str,
+    "quote": str   # eksakt substring fra context
+  }}
+- "quote" må være ordrett, uten endringer.
+- Ikke slå sammen tekst fra flere steder.
+- Hvis ingen eksakt substring finnes, sett:
+  - "validity": "not valid"
+  - "Citations": []
+
+========================================
+SPØRSMÅL:
+{question}
+
+========================================
+CONTEXT:
+{context}
+"""
+)
+
 
 # (Optional) A small registry if you prefer string-based lookups
 REGISTRY: Dict[str, Prompt] = {
