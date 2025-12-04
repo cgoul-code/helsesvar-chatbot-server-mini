@@ -171,6 +171,32 @@ CLASSIFY_AND_SUBQUERIES = Prompt(
         '{{"subqueries":["subquery1","subquery2"]}}'
     )
 )
+    
+SUBQUERIES = Prompt(
+    id="subqueries",
+    template=(
+        "Du får et bruker­spørsmål. Utfør følgende oppgave:\n"
+        "1) Hvis brukerens spørsmål inneholder flere spørsmål, resnskriv disse som \"subqueries\" på en tydelig og lettleselig måte på norsk.\n"
+        "- Ikke svar på delspørsmålene.\n"
+        "- Sørg for at «jeg»-formen bevares.\n"
+        "- Returner kun én versjon av hvert delspørsmål; ikke gi alternativer.\n\n"
+       
+        "# VIKTIG"
+        "- Du må KUN bruke teksten inne i USER_QUERY-blokken under."
+        "- Ikke bruk noe fra instruksjonene eller eksemplene som input."
+        "- Ikke skriv om eller tolk instruksjonene som om de var brukerens tekst."
+        "<<<USER_QUERY_START>>>"
+        "{query}"
+        "<<<USER_QUERY_END>>>"
+        "KRAV TIL OUTPUT:\n"
+        "- Ingen forklaringer, ingen markdown, ingen kodeblokker.\n"
+        "- Bruk doble anførselstegn for alle nøkler og strenger. Ingen hengende komma.\n"
+        "- Output-skjema:\n"
+        "Output JSON ONLY:\n"
+        '{{"subqueries":["subquery1","subquery2"]}}'
+    )
+    
+)
 
 
 QUERY_RERANK_IDS = Prompt(
@@ -377,6 +403,7 @@ REGISTRY: Dict[str, Prompt] = {
     QA_SUBJECT_NO.id: QA_SUBJECT_NO,
     REFINE_AND_CLASSIFY.id: REFINE_AND_CLASSIFY,
     CLASSIFY_AND_SUBQUERIES.id: CLASSIFY_AND_SUBQUERIES,
+    SUBQUERIES.id :SUBQUERIES,
 }
 
 
@@ -403,3 +430,6 @@ def refine_and_classify_prompt(query: str, categories: str) -> str:
 
 def classify_and_subqueries_prompt(query: str, categories: str) -> str:
     return CLASSIFY_AND_SUBQUERIES.render(query=query, categories=categories)
+
+def subqueries_prompt(query: str) -> str:
+    return SUBQUERIES.render(query=query) 

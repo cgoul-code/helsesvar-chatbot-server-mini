@@ -288,35 +288,30 @@ async def get_answer_as_stream(
 
     # 5) Initialize and run your optimizer workflow
     init_state: State_Answer = {
-        "related_only" : query_settings.related_only,
-        "main_category": query_settings.main_category,
-        "query_severity": query_settings.query_severity,
-        "index" : index,
-        "index_related_queries" : index_qa_bank,
         "llm": server_settings.llm,
+        "index" : index,
         "query_engine": query_engine,
-        "query_engine_related_queries": query_engine_related_queries,
         "retriever": retriever,
-        "retriever_related_queries": retriever_related_queries,
         "vector_index_description": vector_index_description,
         "query": query_settings.user_content,
         "from_node_id": query_settings.from_node_id,
-        "from_related_q": query_settings.from_related_q,
         "similarity_cutoff": query_settings.similarity_cutoff,
         "similarity_top_k": query_settings.similarity_top_k,
         "relevancy_cutoff" : query_settings.relevancy_cutoff,
-        "categories": categories,
+        
         # defaults:
+        "relevancy_band": "",
+        "best_node_score": 0.0,
         "response": None,
+        "validate_response_result": "Rejected",
         "answer": "",
-        "lix_score": 0.0,
-        "lix_category": "",
-        "readable_or_not": "not readable",
         "feedback": "",
         "references": [],
-        "structured_answer": "",
-        "completed_subqueries": [],
-        "route":""
+        "subqueries": [],
+        "completed_subqueries":[],
+        "final_answer": "",
+        "input_tokens": 0,
+        "output_tokens": 0,
     }
 
 
