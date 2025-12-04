@@ -1,6 +1,6 @@
 import webbrowser
 
-def save_mermaid_diagram(graph, filename="graph.mmd"):
+def save_mermaid_diagram(graph, filename="docs/graph.mmd"):
     """
     Saves a LangGraph graph as a Mermaid (.mmd) file and opens it in mermaid.live.
     
