@@ -92,7 +92,7 @@ class RelatedQuery(TypedDict):
     query: str
 # Graph state
    
-class State_AnswerWithRelatedQueries(TypedDict):
+class State_Answer(TypedDict):
     related_only: bool
     llm: any  # LLM client (from server_settings.get_llm())
     index: VectorStoreIndex
@@ -664,7 +664,7 @@ def _build_related_queries_retriever(index_qa_bank, *, top_k, cutoff, query_seve
         filters=composite,
     )
     
-def _mode_router(state: State_AnswerWithRelatedQueries) -> str:
+def _mode_router(state: State_Answer) -> str:
     # value set by maybe_use_related_q
     r = state.get("route")
     if r in ("emit", "related_only", "full"):
@@ -731,7 +731,7 @@ def _fetch_answer_from_related_question(
 
     return answer, refs, category, severity
     
-def maybe_use_related_q(state: State_AnswerWithRelatedQueries):
+def maybe_use_related_q(state: State_Answer):
     """
     If from_related_q is True, try to answer directly from the Q→A index.
     On hit -> return final_answer/references and route='emit'.
@@ -771,7 +771,7 @@ def maybe_use_related_q(state: State_AnswerWithRelatedQueries):
         }
     
 # Nodes
-def orchestrator(state: State_AnswerWithRelatedQueries):
+def orchestrator(state: State_Answer):
     """Orchestrator that generates a plan for solving the question"""
     writer = get_stream_writer()  
     writer({"event": "info", "message":"Orchestrator that generates a plan for solving the question"})
@@ -990,7 +990,7 @@ def query_grounded(state: WorkerState) -> dict:
         return {"completed_subqueries": [state["subquery"]]}
 
 
-def related_queries_and_categories(state: State_AnswerWithRelatedQueries) -> dict:
+def related_queries_and_categories(state: State_Answer) -> dict:
     """When related_only=True, make sure required fields exist without running answer/validation."""
     writer = get_stream_writer()
     related_queries = []
@@ -1083,7 +1083,7 @@ def related_queries_and_categories(state: State_AnswerWithRelatedQueries) -> dic
     return {"related_queries": related_queries, "related_categories": related_categories}
     
     
-def synthesizer(state: State_AnswerWithRelatedQueries):
+def synthesizer(state: State_Answer):
     """Synthesize full answer from answers from the subqueries"""
     
     writer = get_stream_writer()  
@@ -1203,7 +1203,7 @@ def synthesizer(state: State_AnswerWithRelatedQueries):
        logging.error(f"Failed to execute agent: {e} ")        
  
 
-def emit_query_answer_references(state: State_AnswerWithRelatedQueries):
+def emit_query_answer_references(state: State_Answer):
     
     
     
@@ -1245,7 +1245,7 @@ def emit_query_answer_references(state: State_AnswerWithRelatedQueries):
     return {}
 
 # Conditional edge function to create llm_call workers that each write a section of the report
-def assign_workers(state: State_AnswerWithRelatedQueries):
+def assign_workers(state: State_Answer):
     """Assign a worker to each section in the plan"""
     writer = get_stream_writer()  
     writer({"event": "info", "message":"Assign a worker to each section in the plan"}) 
@@ -1266,7 +1266,7 @@ def assign_workers(state: State_AnswerWithRelatedQueries):
     ]
 
 # Build workflow
-builder = StateGraph(State_AnswerWithRelatedQueries)
+builder = StateGraph(State_Answer)
 
 # Add the nodes
 builder.add_node("maybe_use_related_q", maybe_use_related_q)
@@ -1302,7 +1302,7 @@ builder.add_edge("emit_query_answer_references", "related_queries_and_categories
 builder.add_edge("related_queries_and_categories", END)
 
 # Compile the workflow
-answer_with_related_queries_workflow = builder.compile()
+answer_workflow = builder.compile()
 
 from graph_utils import save_mermaid_diagram
 #save_mermaid_diagram(answer_with_related_queries_workflow.get_graph())
