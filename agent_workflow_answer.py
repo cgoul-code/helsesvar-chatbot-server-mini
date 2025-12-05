@@ -86,9 +86,14 @@ class RelatedQuery(TypedDict):
 class State_Answer(TypedDict):
     ''' config params'''
     llm: Any
+    
     index: VectorStoreIndex
-    query_engine: BaseQueryEngine
+    query_engine: BaseQueryEngine # Text-bank
     retriever: BaseRetriever
+    
+    index_related_queries: VectorStoreIndex # QA-bank index
+    retriever_related_queries: BaseRetriever
+    
     vector_index_description: str
     query: str
     from_node_id: str
@@ -97,6 +102,8 @@ class State_Answer(TypedDict):
     relevancy_cutoff: float
     
     ''' calculated params'''
+    main_category: str
+    query_severity: Literal["Green", "Yellow", "Red", ""]
     relevancy_band: str
     best_node_score: float
     response: Response | None
@@ -118,6 +125,76 @@ class WorkerState(TypedDict):
     query_engine: BaseQueryEngine
     retriever: BaseRetriever
     llm: Any
+    
+class RelatedQueryAgent:
+    """
+    Handles the special case:
+      - from_related_q == True
+      - from_node_id is set
+    Fetches answer directly from index_related_queries and streams it.
+    """
+
+    def __init__(self, index_related_queries):
+        self.index = index_related_queries
+
+    def _get_node(self, node_id: str):
+        """
+        Look up the node in index_related_queries.
+
+        This is just a stub – adapt it to whatever your index actually is.
+        For example:
+          - if it's a dict:  return self.index.get(node_id)
+          - if it's a vector DB: search by metadata node_id
+        """
+        # EXAMPLE if index is a dict:
+        return self.index.get(node_id)
+
+    async def run(self, *, from_node_id: str, _emit):
+        """
+        _emit(event, data=None, **extra)
+        should be the same function you use in your old agent to send SSE.
+        """
+        node = self._get_node(from_node_id)
+
+        if not node:
+            await _emit(
+                event="answer",
+                structured_answer_delta="Jeg fant dessverre ikke noe svar for dette spørsmålet.",
+            )
+            await _emit(event="done")
+            return
+
+        # Tilpass disse feltene til din faktiske datastruktur
+        answer_text = (
+            node.get("answer")
+            or node.get("content")
+            or node.get("text")
+            or ""
+        )
+
+        if not answer_text.strip():
+            await _emit(
+                event="answer",
+                structured_answer_delta="Jeg fant dessverre ikke noe svar for dette spørsmålet.",
+            )
+            await _emit(event="done")
+            return
+
+        # Her kan du velge å streame stykkevis hvis du vil
+        # For enkelhet sender jeg alt i ett event
+        await _emit(
+            event="answer",
+            structured_answer_delta=answer_text,
+        )
+
+        # Hvis du også vil sende referanser/metadata fra noden, gjør det her:
+        # if "references" in node:
+        #     await _emit(
+        #         event="references",
+        #         structured_answer_delta="\n".join(node["references"]),
+        #     )
+
+        await _emit(event="done")
 
 
 _POSSIBLE_META_IDS = ("doc_id", "from_doc_id", "document_id", "source_id")
@@ -126,13 +203,18 @@ _POSSIBLE_META_IDS = ("doc_id", "from_doc_id", "document_id", "source_id")
 # ---------------------------------------------------------
 # Små hjelpefunksjoner
 # ---------------------------------------------------------
-
-def _emit(delta: str, event: str = "Answer") -> None:
+def _message(delta: str, event: str = "Answer") -> None:
+    """Sender streaming-event til klient (UI)."""
+    writer = get_stream_writer()
+    writer({"event": event, "message": delta})
+    if event == 'info':
+        logging.info(f'event: {event}, structured_answer_delta: {delta}')
+        
+def _emit(delta: str, event: str = "systeminfo") -> None:
     """Sender streaming-event til klient (UI)."""
     writer = get_stream_writer()
     writer({"event": event, "structured_answer_delta": delta})
-    if event == 'info':
-        logging.info(f'event: {event}, structured_answer_delta: {delta}')
+
 
 def _extract_usage_tokens(usage_meta: dict) -> tuple[int, int]:
     """Summerer input/output tokens fra UsageMetadataCallbackHandler.usage_metadata."""
@@ -644,7 +726,7 @@ def _build_related_queries_retriever(
 def orchestrator(state: State_Answer) -> Dict[str, Any]:
     """Planlegger – genererer delspørsmål basert på brukerens spørsmål."""
     
-    _emit("Orchestrator that generates a plan for solving the question", event="info")
+    _message("Orchestrator that generates a plan for solving the question", event="info")
 
     try:
         llm = state["llm"]
@@ -670,7 +752,7 @@ def query_grounded(state: WorkerState) -> Dict[str, Any]:
     - Generer strukturert svar med sitater
     - Verifiser sitatene mot nodene
     """
-    _emit(f"Worker answers the subquery \"{state['subquery'].subquery}\"", event="info")
+    _message(f"Worker answers the subquery \"{state['subquery'].subquery}\"", event="info")
 
     try:
         retriever = state["retriever"]
@@ -840,7 +922,7 @@ def query_grounded(state: WorkerState) -> Dict[str, Any]:
 def synthesizer(state: State_Answer) -> Dict[str, Any]:
     """Sette sammen endelig svar basert på del-svarene."""
     
-    _emit( "Synthesize full answer", event="info")
+    _message( "Synthesize full answer", event="info")
     print('<8>')
     llm = state["llm"]
 
@@ -946,7 +1028,7 @@ def synthesizer(state: State_Answer) -> Dict[str, Any]:
 def emit_query_answer_references(state: State_Answer) -> Dict[str, Any]:
     """Emitter endelig svar + referanser som events."""
     
-    _emit( "Aggregating the final answer", event="info")
+    _message( "Aggregating the final answer", event="info")
 
 
     q = state.get("query")
@@ -957,17 +1039,18 @@ def emit_query_answer_references(state: State_Answer) -> Dict[str, Any]:
     _emit("\n## Svar\n")
 
     answer = state["final_answer"]
+    print(f'Answer:<{answer}>')
     for line in answer.splitlines(True):
-        _emit(line)
-    _emit("\n")
+        _emit(line, event = "answer")
+    _emit("\n", event = "answer")
 
     top5 = state["references"]
 
     if top5:
-        _emit("\n## Referanser\n")
+        #_emit("\n## Referanser\n", event = 'references')
         for r in top5:
             bullet = f"- [{r['name']}]({r['url']}) \n"
-            _emit(bullet)
+            _emit(bullet, event = 'references')
             
     usage_payload = json.dumps(
         {
@@ -1001,7 +1084,7 @@ def emit_query_answer_references(state: State_Answer) -> Dict[str, Any]:
 def assign_workers(state: State_Answer) -> List[Send]:
     """Opprett en worker for hver delspørring."""
 
-    _emit( "Assign a worker to each section in the plan", event="info")
+    _message( "Assign a worker to each section in the plan", event="info")
     
     return [
         Send(
@@ -1017,6 +1100,77 @@ def assign_workers(state: State_Answer) -> List[Send]:
         for s in state["subqueries"]
     ]
 
+def related_queries(state: State_Answer) -> dict:
+
+    writer = get_stream_writer()
+    related_queries = []
+    
+
+    try:        
+        # assume you have index_qa_bank in state (or re-access via your vector_store)
+        # uses main_category to retrieve queries relevant for refined_query
+        retriever = _build_related_queries_retriever(
+            index_qa_bank=state["index_related_queries"],            # ensure you stored this in state earlier
+            top_k=state["similarity_top_k"],
+            cutoff=state["similarity_cutoff"],
+            query_severity=state.get("query_severity"),      # may be None → defaults to all
+            main_category=state.get("main_category"),        # may be None → ignored
+        )
+        
+        print(f'---->query:', state["query"])
+
+        results = retriever.retrieve(state["query"])
+
+        if results:
+            def score_or_min(r):
+                return float("-inf") if (getattr(r, "score", None) is None) else r.score
+
+            max_idx = max(range(len(results)), key=lambda i: score_or_min(results[i]))
+            max_score = score_or_min(results[max_idx])
+
+            if max_score > 0.7:
+                logging.info(f"Dropping top candidate with score {max_score:.3f} (> 0.7)")
+                results = [r for i, r in enumerate(results) if i != max_idx]        
+
+        candidates = []
+    
+        for r in results[:5]:
+            node = getattr(r, "node", r)  # NodeWithScore -> TextNode
+            meta = getattr(node, "metadata", {}) or {}
+
+            text = _node_text(node)
+            # Use your helper to collect possible ids (metadata ids + id_/node_id)
+   
+            node_id = getattr(node, "node_id", getattr(node, "id_", ""))
+
+            sev = meta.get("severity", "")
+            cat = meta.get("category", "")
+            # Prefer from_doc_id, fallback to node_id / id_
+            doc_id = meta.get("from_doc_id", getattr(node, "node_id", getattr(node, "id_", "")))
+            score = float(getattr(r, "score", 0.0) or 0.0)
+
+            candidates.append({
+                "id": str(doc_id),
+                "node_id": node_id,
+                "text": text,
+                "severity": sev,
+                # keep if you want to inspect:
+                # "score": score,
+                # "category": cat,
+            })
+    
+        related_queries = [{"keyword": s.get("severity", ""), "query": s.get("text",""), "node_id": s.get("node_id", "")} for s in candidates]
+
+        related_queries_payload = json.dumps(related_queries, ensure_ascii=False)
+
+        # Emit ONLY the JSON array (client listens for this event)
+        _emit(related_queries_payload, event="related queries")
+                                           
+        
+    except Exception as e:
+       logging.error(f"Failed to execute agent: {e} ")       
+        
+    return {"related_queries": related_queries}
 
 # ---------------------------------------------------------
 # Bygg workflow
@@ -1028,6 +1182,7 @@ builder.add_node("orchestrator", orchestrator)
 builder.add_node("query_grounded", query_grounded)
 builder.add_node("synthesizer", synthesizer, join=True)
 builder.add_node("emit_query_answer_references", emit_query_answer_references)
+builder.add_node("related_queries", related_queries)
 
 builder.add_edge(START, "orchestrator")
 
@@ -1036,6 +1191,7 @@ builder.add_conditional_edges("orchestrator", assign_workers, ["query_grounded"]
 
 builder.add_edge("query_grounded", "synthesizer")
 builder.add_edge("synthesizer", "emit_query_answer_references")
-builder.add_edge("emit_query_answer_references", END)
+builder.add_edge("emit_query_answer_references", "related_queries")
+builder.add_edge("related_queries", END)
 
 answer_workflow = builder.compile()
