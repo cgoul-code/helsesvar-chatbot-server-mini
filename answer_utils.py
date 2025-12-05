@@ -1,14 +1,13 @@
 from agent_workflow_answer import (answer_workflow, State_Answer)
+from agent_workflow_qa import (related_qa_workflow, State_Related)
 from config import ServerSettings, VectorIndexStore, CustomError
 from query_utils import QuerySettings
 from llama_index.core.vector_stores import MetadataFilter, MetadataFilters
 from llama_index.core.query_engine import RetrieverQueryEngine 
 from llama_index.core.llms import ChatMessage, MessageRole
 from llama_index.core import ChatPromptTemplate, get_response_synthesizer, VectorStoreIndex
+from typing import Literal
 import logging
-import IPython
-
-
 
 categories = [
   {
@@ -124,9 +123,6 @@ async def get_answer_as_stream(
     vector_store: VectorIndexStore
 ):
     print('------------->>get_answer')
-    related_only = query_settings.related_only
-    main_category = query_settings.main_category
-    query_severity = query_settings.query_severity
     # 1) Try to load the requested index
     vec_name = query_settings.vectorIndex
     entry = vector_store.get(vec_name)
@@ -156,7 +152,6 @@ async def get_answer_as_stream(
         )
 
     index_qa_bank: VectorStoreIndex = entry_qa_bank.index
-    vector_index_description_qa_bank = entry_qa_bank.description
 
     # 2) Build your prompt template
     text_qa_template = ChatPromptTemplate([
@@ -284,7 +279,6 @@ async def get_answer_as_stream(
     # )
         
     
-    
 
     # 5) Initialize and run your optimizer workflow
     init_state: State_Answer = {
@@ -294,6 +288,10 @@ async def get_answer_as_stream(
         "retriever": retriever,
         "vector_index_description": vector_index_description,
         "query": query_settings.user_content,
+        
+        "index_related_queries" :index_qa_bank,
+        "retriever_related_queries" : retriever_related_queries,
+        
         "from_node_id": query_settings.from_node_id,
         "similarity_cutoff": query_settings.similarity_cutoff,
         "similarity_top_k": query_settings.similarity_top_k,
@@ -318,5 +316,51 @@ async def get_answer_as_stream(
 
     # ✅ This is  an **async generator**
     async for chunk in answer_workflow.astream(init_state, stream_mode="custom"):
+        yield chunk
+
+# --------------------------------------------------------------------------------------------------------------
+
+async def get_related_qa_as_stream(
+    query_settings: QuerySettings,
+    server_settings: ServerSettings,
+    vector_store: VectorIndexStore
+):
+
+    # 1) Load the qa_bank corresponding to the index
+    vec_name_qa_bank = f'{query_settings.vectorIndex}_qa_bank'
+    entry_qa_bank = vector_store.get(vec_name_qa_bank)
+    if entry_qa_bank is None:
+        # Log with %s formatting
+        logging.error("Index not found: %s", vec_name_qa_bank)
+        # Raise so the route handler can catch & return 404 JSON
+        raise CustomError(
+            f"Index not found, referansefilene for {vec_name_qa_bank} mangler!",
+            404
+        )
+    index_qa_bank: VectorStoreIndex = entry_qa_bank.index
+
+    # 2) Initialize and run your optimizer workflow
+    init_state: State_Related = {
+        "llm": server_settings.llm,
+        "index_related_queries" : index_qa_bank,
+        "categories": categories,
+        "query": query_settings.user_content,
+        "from_node_id": query_settings.from_node_id,
+        
+        "similarity_cutoff": query_settings.similarity_cutoff,
+        "similarity_top_k": query_settings.similarity_top_k,
+        "relevancy_cutoff" : query_settings.relevancy_cutoff,
+        
+        # defaults:
+        "main_category": "",
+        "query_severity": Literal["Green", "Yellow", "Red", ""],
+        "references": [],
+        "final_answer": ""  
+    }
+
+
+
+    # ✅ This is  an **async generator**
+    async for chunk in related_qa_workflow.astream(init_state, stream_mode="custom"):
         yield chunk
 

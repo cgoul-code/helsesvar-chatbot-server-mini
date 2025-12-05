@@ -3,12 +3,13 @@ import logging, json, asyncio
 from config import server_settings, vector_store
 from query_utils import get_query_settings
 from answer_utils import (
-    get_answer_as_stream,
+    get_answer_as_stream, get_related_qa_as_stream
 )
 
 # Agents must be async generators that yield small dict/str chunks
 AGENT_REGISTRY = {
     "hvaerinnafor": get_answer_as_stream,
+    "hvaerinnafor_related_qa": get_related_qa_as_stream,
 #    "structured": get_answer_structured_as_stream,
 }
 
