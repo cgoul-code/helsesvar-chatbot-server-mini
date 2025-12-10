@@ -37,7 +37,9 @@ from registry import subqueries_prompt, GROUNDED_PROMPT
 class Reference(TypedDict):
     name: str
     url: str
+    icon_url: str
     relevancy_index: float
+    
 
 
 class Citation(BaseModel):
@@ -785,6 +787,7 @@ def query_grounded(state: WorkerState) -> Dict[str, Any]:
             refs.append({
                 "name": (meta.get("title") or "Ingen tittel").lstrip(),
                 "url": meta.get("url", "Ingen URL"),
+                "icon_url": meta.get("icon_url", "Ingen URL for ikon"),
                 "relevancy_index": float(getattr(nws, "score", 0.0)),
             })
         print('<1>')
@@ -1047,10 +1050,17 @@ def emit_query_answer_references(state: State_Answer) -> Dict[str, Any]:
     top5 = state["references"]
 
     if top5:
-        #_emit("\n## Referanser\n", event = 'references')
         for r in top5:
-            bullet = f"- [{r['name']}]({r['url']}) \n"
-            _emit(bullet, event = 'references')
+            name = r.get("name", "Uten tittel")
+            url = r.get("url", "#")
+            icon_url = r.get("icon_url")
+
+            if icon_url:
+                bullet = f'- [{name}]({url}) ![]({icon_url})\n'
+            else:
+                bullet = f'- [{name}]({url})\n'
+
+            _emit(bullet, event="references")
             
     usage_payload = json.dumps(
         {
