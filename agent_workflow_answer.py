@@ -29,6 +29,14 @@ from rapidfuzz.fuzz import partial_ratio
 
 from registry import subqueries_prompt, GROUNDED_PROMPT
 
+# Hvor mange noder sender vi inn i LLM-konteksten?
+MAX_NODES_FOR_CONTEXT = 8
+
+# Hvor mange noder bruker vi til å verifisere sitater?
+MAX_NODES_FOR_VERIFICATION = 8
+
+# Hvis best_score > dette → vi anser treffet som veldig godt og kan gjøre mindre arbeid
+HIGH_CONFIDENCE_THRESHOLD = 0.82
 
 # ---------------------------------------------------------
 # Datamodeller og typer
@@ -103,6 +111,9 @@ class State_Answer(TypedDict):
     similarity_top_k: int
     relevancy_cutoff: float
     
+    ''' router / plan '''
+    needs_subqueries: bool  # <--- NY
+    
     ''' calculated params'''
     main_category: str
     query_severity: Literal["Green", "Yellow", "Red", ""]
@@ -120,6 +131,16 @@ class State_Answer(TypedDict):
     input_tokens: Annotated[int, add]
     output_tokens: Annotated[int, add]
 
+class QueryPlan(BaseModel):
+    refined_query: str = Field(
+        description="Rewritten, clear version of user's question in Norwegian."
+    )
+    needs_subqueries: bool = Field(
+        description=(
+            "True if the question should be decomposed into multiple subqueries "
+            "to answer it properly, False if a single answer is enough."
+        )
+    )
 
 class WorkerState(TypedDict):
     subquery: SubQuery
@@ -214,6 +235,8 @@ def _message(delta: str, event: str = "Answer") -> None:
         
 def _emit(delta: str, event: str = "systeminfo") -> None:
     """Sender streaming-event til klient (UI)."""
+    if event == "systeminfo": return
+    
     writer = get_stream_writer()
     writer({"event": event, "structured_answer_delta": delta})
 
@@ -720,11 +743,71 @@ def _build_related_queries_retriever(
         filters=composite,
     )
 
+def _dedupe_references(refs: List[Reference], top_k: int = 5) -> List[Reference]:
+    """
+    Fjerner duplikate referanser basert på URL.
+    - Beholder første forekomst av hver URL
+    - Returnerer inntil top_k referanser
+    """
+    if not refs:
+        return []
+
+    seen_urls = set()
+    deduped: List[Reference] = []
+
+    for r in refs:
+        if isinstance(r, dict):
+            url = r.get("url")
+        else:
+            url = getattr(r, "url", None)
+
+        if not url:
+            continue
+
+        if url in seen_urls:
+            continue  # duplikat, hopp over
+        
+        seen_urls.add(url)
+        deduped.append(r)
+
+        if len(deduped) >= top_k:
+            break
+
+    return deduped
 
 # ---------------------------------------------------------
 # Noder i grafen
 # ---------------------------------------------------------
+def analyze_query(state: State_Answer) -> Dict[str, Any]:
+    """Renskriver spørsmålet og avgjør om vi trenger subqueries."""
 
+    _message("Analyze and possibly rewrite user query", event="info")
+
+    llm = state["llm"]
+    original_q = state["query"]
+
+    prompt = (
+        "Du er en helseveileder som hjelper ungdom i Norge.\n\n"
+        "Oppgave:\n"
+        "1. Skriv brukerens spørsmål om til én kort, tydelig og konkret formulering "
+        "på norsk, uten å endre meningen.\n"
+        "2. Vurder om spørsmålet bør deles opp i flere delspørsmål for å gi et godt svar.\n"
+        "   Sett needs_subqueries = True hvis:\n"
+        "   - det spørres om flere forskjellige ting/temaer, eller\n"
+        "   Ellers False.\n\n"
+        f"Brukerens spørsmål:\n\"\"\"{original_q}\"\"\""
+    )
+
+    planner = llm.with_structured_output(QueryPlan)
+    plan: QueryPlan = planner.invoke(prompt)
+    
+
+    # Vi skriver om query i state til renskrevet versjon
+    return {
+        "query": plan.refined_query,
+        "needs_subqueries": plan.needs_subqueries,
+    }
+    
 def orchestrator(state: State_Answer) -> Dict[str, Any]:
     """Planlegger – genererer delspørsmål basert på brukerens spørsmål."""
     
@@ -745,14 +828,75 @@ def orchestrator(state: State_Answer) -> Dict[str, Any]:
             "subqueries": []
         }
 
+def fast_single(state: State_Answer) -> Dict[str, Any]:
+    """
+    Fasttrack: bruk query_grounded på ett enkelt spørsmål,
+    og sett final_answer + references direkte.
+    Respekterer response_validity som er satt basert på claims_report.
+    """
 
+    _message("Fasttrack: answer single refined question without subqueries", event="info")
+
+    # Lag en SubQuery med det renskrevne spørsmålet
+    subq = SubQuery(
+        subquery=state["query"],
+        answer="",
+        references=[],
+        response_validity="not valid",
+        response_validity_index=0.0,
+    )
+
+    worker_state: WorkerState = {
+        "subquery": subq,
+        "similarity_cutoff": state["similarity_cutoff"],
+        "query_engine": state["query_engine"],
+        "retriever": state["retriever"],
+        "llm": state["llm"],
+    }
+
+    # Kjør eksisterende logikk (henter noder, genererer GroundedAnswer,
+    # kjører _verify_claims, setter response_validity osv.)
+    result = query_grounded(worker_state)
+
+    completed_list = result.get("completed_subqueries") or [subq]
+    completed = completed_list[0]
+
+    in_tokens = result.get("input_tokens", 0) or 0
+    out_tokens = result.get("output_tokens", 0) or 0
+
+    # ---------- HER BRUKER VI CLAIMS-VALIDERINGA ----------
+    if completed.response_validity == "valid":
+        final_answer = completed.answer
+        refs = _dedupe_references(completed.references, top_k=5)
+    else:
+        final_answer = (
+            "Jeg beklager, men jeg kan bare svare på spørsmål basert på den gitte konteksten."
+        )
+        refs = []
+    # ------------------------------------------------------
+
+    # Oppdater state-feltene som brukes senere
+    return {
+        "completed_subqueries": [completed],
+        "final_answer": final_answer,
+        "references": refs,
+        "input_tokens": (state.get("input_tokens", 0) or 0) + in_tokens,
+        "output_tokens": (state.get("output_tokens", 0) or 0) + out_tokens,
+    }
+    
+def route_after_analysis(state: State_Answer) -> str:
+    """Bestem neste node basert på needs_subqueries."""
+    if state.get("needs_subqueries"):
+        return "orchestrator"
+    return "fast_single"
+    
 def query_grounded(state: WorkerState) -> Dict[str, Any]:
     """
     For hvert delspørsmål:
     - Hent relevante noder
     - Vurder relevans
     - Generer strukturert svar med sitater
-    - Verifiser sitatene mot nodene
+    - Verifiser sitatene mot nodene (men på en mer effektiv måte)
     """
     _message(f"Worker answers the subquery \"{state['subquery'].subquery}\"", event="info")
 
@@ -760,6 +904,7 @@ def query_grounded(state: WorkerState) -> Dict[str, Any]:
         retriever = state["retriever"]
         question = state["subquery"].subquery
 
+        # 1) Retrieval
         nodes = retriever.retrieve(question) or []
 
         thresholds = state.get("relevancy_thresholds", {
@@ -773,8 +918,11 @@ def query_grounded(state: WorkerState) -> Dict[str, Any]:
             state["subquery"].answer = (
                 "Jeg beklager, men jeg kan bare svare på spørsmål basert på den gitte konteksten."
             )
-            return {"completed_subqueries": [state["subquery"]]}
+            return {"completed_subqueries": [state["subquery"]],
+                    "input_tokens": 0,
+                    "output_tokens": 0}
 
+        # 2) Relevans / band
         best_nws = max(nodes, key=lambda n: n.score)
         best_score = float(getattr(best_nws, "score", 0.0))
         band = _classify_relevancy(best_score, thresholds)
@@ -790,7 +938,7 @@ def query_grounded(state: WorkerState) -> Dict[str, Any]:
                 "icon_url": meta.get("icon_url", "Ingen URL for ikon"),
                 "relevancy_index": float(getattr(nws, "score", 0.0)),
             })
-        print('<1>')
+
         state["subquery"].response_validity_index = best_score
 
         if band == "Rejected":
@@ -798,43 +946,51 @@ def query_grounded(state: WorkerState) -> Dict[str, Any]:
             state["subquery"].answer = (
                 "Jeg beklager, men jeg kan bare svare på spørsmål basert på den gitte konteksten."
             )
-            return {"completed_subqueries": [state["subquery"]]}
+            return {"completed_subqueries": [state["subquery"]],
+                    "input_tokens": 0,
+                    "output_tokens": 0}
 
-        ctx = _format_context_from_nodes(nodes)
-        print('<2>')
+        # 3) Begrens hvor mange noder vi bruker videre
+        #    - få noder gir mye mindre prompt + raskere sitat-sjekk
+        nodes_for_context = nodes[:MAX_NODES_FOR_CONTEXT]
+        nodes_for_verification = nodes[:MAX_NODES_FOR_VERIFICATION]
+
+        ctx = _format_context_from_nodes(nodes_for_context)
         usage_callback = UsageMetadataCallbackHandler()
+
         chain = (
             RunnableLambda(lambda _: {"question": question, "context": ctx})
             | GROUNDED_PROMPT
             | state["llm"].with_structured_output(GroundedAnswer)
         )
-        # 3) Kjør kjeden, men send inn callback via config
+
         ga: GroundedAnswer = chain.invoke(
             {},
             config={"callbacks": [usage_callback]},
         )
 
-        print(f'<3> {ga}')
         in_tokens, out_tokens = _extract_usage_tokens(usage_callback.usage_metadata)
         logging.info(
             f"Subquery '{question}' brukte ca. {in_tokens} input tokens, {out_tokens} output tokens"
         )
 
-        
+        # 4) Claims-verifisering – gjør den litt billigere
+        #    a) Hvis du vil være raskere: dropp fuzzy (sett fuzzy_min_ratio=None)
+        #    b) Eller behold den, men med færre noder (vi bruker nodes_for_verification)
         results = _verify_claims(
             ga,
-            nodes,
+            nodes_for_verification,
             min_quote_chars=8,
             collapse_whitespace=True,
             case_sensitive=False,
-            fuzzy_min_ratio=60,
+            fuzzy_min_ratio=60,    # sett til None for enda mer fart
         )
-        print('<4>')
+
         global_problems = results.get("global_problems", [])
         claims_report = results.get("claims_report", [])
         answer_wrapped = _wrap_at_nearest_space(ga.answer, width=120)
-        print('<5>')
-        # UI-output
+
+        # 5) UI-output (kan også trimmes om du vil)
         _emit(f"## Delspørsmål: {question}", event="systeminfo")
         _emit("## Svar på delspørsmål:", event="systeminfo")
         _emit(answer_wrapped, event="systeminfo")
@@ -903,30 +1059,33 @@ def query_grounded(state: WorkerState) -> Dict[str, Any]:
 
         res = state["subquery"].response_validity
         _emit(f"## Resultat: {res}", event="systeminfo")
-        print('<6>')
 
         state["subquery"].answer = ga.answer
         state["subquery"].references = refs
-        print(f'<7>')
-        
-        return {"completed_subqueries": [state["subquery"]],
-                "input_tokens": in_tokens,
-                "output_tokens": out_tokens,}
+
+        return {
+            "completed_subqueries": [state["subquery"]],
+            "input_tokens": in_tokens,
+            "output_tokens": out_tokens,
+        }
 
     except Exception as e:
         logging.error("Failed to execute query_grounded: %s", e)
         state["subquery"].response_validity = "not valid"
         state["subquery"].answer = "Jeg klarte ikke å verifisere sitatene nå."
-        return {"completed_subqueries": [state["subquery"]],
-                "input_tokens": 0,
-                "output_tokens": 0,}
+        return {
+            "completed_subqueries": [state["subquery"]],
+            "input_tokens": 0,
+            "output_tokens": 0,
+        }
+
 
 
 def synthesizer(state: State_Answer) -> Dict[str, Any]:
     """Sette sammen endelig svar basert på del-svarene."""
     
     _message( "Synthesize full answer", event="info")
-    print('<8>')
+
     llm = state["llm"]
 
     try:
@@ -939,10 +1098,10 @@ def synthesizer(state: State_Answer) -> Dict[str, Any]:
             if s.response_validity == "valid":
                 combined = f"Subquery: {s.subquery}\n\nAnswer: {s.answer}\n\n"
                 completed_report_answers += combined
-            else:
-                completed_report_answers_non_valid += (
-                    f'\n\nBeklager, men jeg kunne ikke svare på spørsmålet: "{s.subquery}"'
-                )
+            #else:
+                #completed_report_answers_non_valid += (
+                #    f'\n\nBeklager, men jeg kunne ikke svare på spørsmålet: "{s.subquery}"'
+                #)
 
         if completed_report_answers:
             logging.info("Aggregating these answers: %s", completed_report_answers)
@@ -982,28 +1141,9 @@ def synthesizer(state: State_Answer) -> Dict[str, Any]:
             ref_list: List[Reference] = []
             for s in sq:
                 if s.references and s.response_validity == "valid":
-                    for r in s.references:
-                        ref_list.append(r)
+                    ref_list.extend(s.references)
 
-            best_by_url: Dict[str, Reference] = {}
-            for r in ref_list:
-                url = r.get("url") if isinstance(r, dict) else getattr(r, "url", None)
-                score = (
-                    r.get("relevancy_index")
-                    if isinstance(r, dict)
-                    else getattr(r, "relevancy_index", None)
-                )
-                if url is None or score is None:
-                    continue
-
-                if (url not in best_by_url) or (score > best_by_url[url]["relevancy_index"]):
-                    best_by_url[url] = r
-
-            top5 = heapq.nlargest(
-                5,
-                best_by_url.values(),
-                key=lambda x: x["relevancy_index"],
-            )
+            top5 = _dedupe_references(ref_list, top_k=5)
 
             return {
                 "final_answer": aggregated_answer.content + completed_report_answers_non_valid,
@@ -1042,7 +1182,7 @@ def emit_query_answer_references(state: State_Answer) -> Dict[str, Any]:
     _emit("\n## Svar\n")
 
     answer = state["final_answer"]
-    print(f'Answer:<{answer}>')
+
     for line in answer.splitlines(True):
         _emit(line, event = "answer")
     _emit("\n", event = "answer")
@@ -1059,7 +1199,6 @@ def emit_query_answer_references(state: State_Answer) -> Dict[str, Any]:
                 bullet = f'- [{name}]({url}) ![]({icon_url})\n'
             else:
                 bullet = f'- [{name}]({url})\n'
-
             _emit(bullet, event="references")
             
     usage_payload = json.dumps(
@@ -1126,8 +1265,7 @@ def related_queries(state: State_Answer) -> dict:
             query_severity=state.get("query_severity"),      # may be None → defaults to all
             main_category=state.get("main_category"),        # may be None → ignored
         )
-        
-        print(f'---->query:', state["query"])
+
 
         results = retriever.retrieve(state["query"])
 
@@ -1188,20 +1326,37 @@ def related_queries(state: State_Answer) -> dict:
 
 builder = StateGraph(State_Answer)
 
+builder.add_node("analyze_query", analyze_query)          
+builder.add_node("fast_single", fast_single)              
+
 builder.add_node("orchestrator", orchestrator)
 builder.add_node("query_grounded", query_grounded)
 builder.add_node("synthesizer", synthesizer, join=True)
 builder.add_node("emit_query_answer_references", emit_query_answer_references)
 builder.add_node("related_queries", related_queries)
 
-builder.add_edge(START, "orchestrator")
+# Start → analyse
+builder.add_edge(START, "analyze_query")
 
-# Orchestrator → genererer subqueries → assign_workers bestemmer flere query_grounded-noder
+# Etter analyse: enten fasttrack eller full multisteg-flyt
+builder.add_conditional_edges(
+    "analyze_query",
+    route_after_analysis,              # funksjonen over
+    ["fast_single", "orchestrator"],   # mulig returverdier
+)
+
+# Hvis multi: bruk eksisterende flyt
 builder.add_conditional_edges("orchestrator", assign_workers, ["query_grounded"])
-
 builder.add_edge("query_grounded", "synthesizer")
 builder.add_edge("synthesizer", "emit_query_answer_references")
+
+# Hvis fasttrack: gå rett til emitter
+builder.add_edge("fast_single", "emit_query_answer_references")
+
+# Videre er likt for begge ruter
 builder.add_edge("emit_query_answer_references", "related_queries")
 builder.add_edge("related_queries", END)
 
 answer_workflow = builder.compile()
+from graph_utils import save_mermaid_diagram
+save_mermaid_diagram(answer_workflow.get_graph())
