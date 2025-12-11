@@ -122,6 +122,37 @@ async def get_answer_as_stream(
     server_settings: ServerSettings,
     vector_store: VectorIndexStore
 ):
+    # Build a conversation string from messages (if any)
+    history = query_settings.messages or []
+    convo_lines = []
+    for m in history:
+        role = m.get("role", "user")
+        content = m.get("content", "")
+        if not content:
+            continue
+        if role == "user":
+            convo_lines.append(f"Bruker: {content}")
+        elif role == "assistant":
+            convo_lines.append(f"Veileder: {content}")
+        else:
+            convo_lines.append(f"{role}: {content}")
+
+    conversation_str = "\n".join(convo_lines)
+
+    # Extract last user question (already done in QuerySettings)
+    last_question = query_settings.user_content or query_settings.query
+  
+      # Combine for the workflow:
+    if conversation_str:
+        full_query = (
+            f"Tidligere samtale mellom bruker og veileder:\n"
+            f"{conversation_str}\n\n"
+            f"Siste spørsmål fra bruker som du skal svare på nå:\n"
+            f"{last_question}"
+        )
+    else:
+        full_query = last_question
+  
     print('------------->>get_answer')
     # 1) Try to load the requested index
     vec_name = query_settings.vectorIndex
@@ -277,8 +308,7 @@ async def get_answer_as_stream(
     #     retriever=retriever_related_queries,
     #     response_synthesizer=response_related_queries_synthesizer,
     # )
-        
-    
+
 
     # 5) Initialize and run your optimizer workflow
     init_state: State_Answer = {
@@ -287,7 +317,8 @@ async def get_answer_as_stream(
         "query_engine": query_engine,
         "retriever": retriever,
         "vector_index_description": vector_index_description,
-        "query": query_settings.user_content,
+        #"query": query_settings.user_content,
+        "query": full_query,
         
         "index_related_queries" :index_qa_bank,
         "retriever_related_queries" : retriever_related_queries,
@@ -325,8 +356,22 @@ async def get_related_qa_as_stream(
     server_settings: ServerSettings,
     vector_store: VectorIndexStore
 ):
+    # 1) Load the text_bank corresponding to the index
+    vec_name = query_settings.vectorIndex
+    entry = vector_store.get(vec_name)
+    if entry is None:
+        # Log with %s formatting
+        logging.error("Index not found: %s", vec_name)
+        # Raise so the route handler can catch & return 404 JSON
+        raise CustomError(
+            f"Index not found, referansefilene for {vec_name} mangler!",
+            404
+        )
+
+    index: VectorStoreIndex = entry.index
 
     # 1) Load the qa_bank corresponding to the index
+    
     vec_name_qa_bank = f'{query_settings.vectorIndex}_qa_bank'
     entry_qa_bank = vector_store.get(vec_name_qa_bank)
     if entry_qa_bank is None:
@@ -338,10 +383,12 @@ async def get_related_qa_as_stream(
             404
         )
     index_qa_bank: VectorStoreIndex = entry_qa_bank.index
+    
 
     # 2) Initialize and run your optimizer workflow
     init_state: State_Related = {
         "llm": server_settings.llm,
+        "index": index,
         "index_related_queries" : index_qa_bank,
         "categories": categories,
         "query": query_settings.user_content,
