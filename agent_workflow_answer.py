@@ -1,3 +1,4 @@
+import os
 import json
 import logging
 import re
@@ -782,10 +783,9 @@ def analyze_query(state: State_Answer) -> Dict[str, Any]:
     """Renskriver spørsmålet og avgjør om vi trenger subqueries."""
 
     _emit("Analyze and possibly rewrite user query", event="info")
-    print('<1>')
+
     llm = state["llm"]
     original_q = state["query"]
-    print(f'<2>{llm}')
     prompt = (
         "Du er en helseveileder som hjelper ungdom i Norge.\n\n"
         "Oppgave:\n"
@@ -800,8 +800,8 @@ def analyze_query(state: State_Answer) -> Dict[str, Any]:
 
     planner = llm.with_structured_output(QueryPlan)
     plan: QueryPlan = planner.invoke(prompt)
-    print('<3>')
     
+    print(f'<<<<Plan refined query:{plan.refined_query}>>>>>>')
 
     # Vi skriver om query i state til renskrevet versjon
     return {
@@ -1174,59 +1174,68 @@ def emit_query_answer_references(state: State_Answer) -> Dict[str, Any]:
     
     _emit( "Aggregating the final answer", event="info")
 
+    try:
+        q = state.get("query")
+        if q:
+            _emit(json.dumps(q, ensure_ascii=False), event="Refined query")
 
-    q = state.get("query")
-    if q:
-        _emit(json.dumps(q, ensure_ascii=False), event="Refined query")
+        _emit(f"\n## Du spurte\n{state['query']}\n")
+        _emit("\n## Svar\n")
 
-    _emit(f"\n## Du spurte\n{state['query']}\n")
-    _emit("\n## Svar\n")
+        answer = state["final_answer"]
 
-    answer = state["final_answer"]
+        for line in answer.splitlines(True):
+            _emit(line, event = "answer")
+        _emit("\n", event = "answer")
 
-    for line in answer.splitlines(True):
-        _emit(line, event = "answer")
-    _emit("\n", event = "answer")
+        top5 = state["references"]
 
-    top5 = state["references"]
+        if top5:
+            for r in top5:
+                name = r.get("name", "Uten tittel")
+                url = r.get("url", "#")
+                icon_url = r.get("icon_url")
 
-    if top5:
-        for r in top5:
-            name = r.get("name", "Uten tittel")
-            url = r.get("url", "#")
-            icon_url = r.get("icon_url")
+                if icon_url:
+                    bullet = f'- [{name}]({url}) ![]({icon_url})\n'
+                else:
+                    bullet = f'- [{name}]({url})\n'
+                _emit(bullet, event="references")
+                
+        usage_payload = json.dumps(
+            {
+                "input_tokens": state.get("input_tokens", 0),
+                "output_tokens": state.get("output_tokens", 0),
+            },
+            ensure_ascii=False,
+        )
+        _emit(usage_payload, event="Token usage")
+        
+        # priser i USD per 1M tokens
+        price_input_usd_per_m = float(os.environ["PRICE_INPUT_USD_PER_M"])
+        price_output_usd_per_m = float(os.environ["PRICE_OUTPUT_USD_PER_M"])
+        USD_TO_NOK = 10  # grovt anslag
 
-            if icon_url:
-                bullet = f'- [{name}]({url}) ![]({icon_url})\n'
-            else:
-                bullet = f'- [{name}]({url})\n'
-            _emit(bullet, event="references")
-            
-    usage_payload = json.dumps(
-        {
-            "input_tokens": state.get("input_tokens", 0),
-            "output_tokens": state.get("output_tokens", 0),
-        },
-        ensure_ascii=False,
-    )
-    _emit(usage_payload, event="Token usage")
-    
-    # priser i USD per 1M tokens
-    PRICE_INPUT_USD_PER_M = 0.25
-    PRICE_OUTPUT_USD_PER_M = 2.0
-    USD_TO_NOK = 10  # grovt anslag
+        input_tokens = state.get("input_tokens", 0) or 0
+        output_tokens = state.get("output_tokens", 0) or 0
 
-    input_tokens = state.get("input_tokens", 0) or 0
-    output_tokens = state.get("output_tokens", 0) or 0
+        kost_usd = (
+            input_tokens * price_input_usd_per_m
+            + output_tokens * price_output_usd_per_m
+        ) / 1_000_000
 
-    kost_usd = (
-        input_tokens * PRICE_INPUT_USD_PER_M
-        + output_tokens * PRICE_OUTPUT_USD_PER_M
-    ) / 1_000_000
+        kost_nok = kost_usd * USD_TO_NOK
 
-    kost_nok = kost_usd * USD_TO_NOK
-
-    _emit(f"\nKost: {kost_nok:.4f} NOK", event="Token usage")
+        _emit(f"\nKost: {kost_nok:.4f} NOK", event="Token usage")
+        
+    except Exception as e:
+        logging.error("Failed to execute emit_query_answer_references: %s", e)
+        return {
+            "final_answer": (
+                "Jeg beklager, men jeg klarte ikke å sette sammen et helhetlig svar nå."
+            ),
+            "references": [],
+        }
 
     return {}
 
@@ -1254,7 +1263,6 @@ def related_queries(state: State_Answer) -> dict:
 
     writer = get_stream_writer()
     related_queries = []
-    
 
     try:        
         # assume you have index_qa_bank in state (or re-access via your vector_store)
@@ -1267,7 +1275,6 @@ def related_queries(state: State_Answer) -> dict:
             main_category=state.get("main_category"),        # may be None → ignored
         )
 
-
         results = retriever.retrieve(state["query"])
 
         if results:
@@ -1276,17 +1283,16 @@ def related_queries(state: State_Answer) -> dict:
 
             max_idx = max(range(len(results)), key=lambda i: score_or_min(results[i]))
             max_score = score_or_min(results[max_idx])
+            
 
             if max_score > 0.7:
                 logging.info(f"Dropping top candidate with score {max_score:.3f} (> 0.7)")
                 results = [r for i, r in enumerate(results) if i != max_idx]        
 
         candidates = []
-    
         for r in results[:5]:
             node = getattr(r, "node", r)  # NodeWithScore -> TextNode
             meta = getattr(node, "metadata", {}) or {}
-
             text = _node_text(node)
             # Use your helper to collect possible ids (metadata ids + id_/node_id)
    
@@ -1297,7 +1303,12 @@ def related_queries(state: State_Answer) -> dict:
             # Prefer from_doc_id, fallback to node_id / id_
             doc_id = meta.get("from_doc_id", getattr(node, "node_id", getattr(node, "id_", "")))
             score = float(getattr(r, "score", 0.0) or 0.0)
-
+            
+            s = {"id": str(doc_id),
+                "node_id": node_id,
+                "text": text,
+                "severity": sev}
+            
             candidates.append({
                 "id": str(doc_id),
                 "node_id": node_id,

@@ -13,6 +13,8 @@ AGENT_REGISTRY = {
 #    "structured": get_answer_structured_as_stream,
 }
 
+SESSION_STORE: dict[str, list[dict]] = {}
+
 def _format_sse(data: str, event: str | None = None) -> str:
     """Format one SSE message (optionally named), ending with a blank line."""
     lines = []
@@ -50,6 +52,27 @@ def register_routes(app):
 
             query_settings = get_query_settings(payload)
             
+            # 1) resolve / create session_id
+            session_id = query_settings.session_id or payload.get("session_id")
+            if not session_id:
+                # very simple: generate one (in prod you’d use uuid4)
+                import secrets
+                session_id = secrets.token_hex(8)
+            query_settings.session_id = session_id
+
+            # 2) load existing history or start fresh
+            history = SESSION_STORE.get(session_id, [])
+
+            # 3) merge client messages into history:
+            #    (here I assume payload.messages are the new messages since last time,
+            #     or you can trust them fully and just store them)
+            new_messages = payload.get("messages", [])
+            history.extend(new_messages)
+            SESSION_STORE[session_id] = history
+
+            # 4) pass full history into agent via query_settings
+            query_settings.messages = history
+                
             agent_name = getattr(query_settings, "agent", None)
             agent_fn = AGENT_REGISTRY.get(agent_name)
             if agent_fn is None:
@@ -57,44 +80,57 @@ def register_routes(app):
                 return {"error": f"Unknown agent '{agent_name}'"}, 400
 
             async def stream_answer():
-                # open event (optional, but handy for client state)
                 yield _format_sse(json.dumps({"event": "open", "message": "ok"}, ensure_ascii=False))
 
-                # heartbeats so proxies don’t drop idle connections
                 heartbeat_interval = 20
                 last_sent = asyncio.get_event_loop().time()
 
+                # NEW: get session + history (assuming you added it earlier)
+                session_id = getattr(query_settings, "session_id", None)
+                history = SESSION_STORE.get(session_id, [])
+
+                assistant_buffer: list[str] = []
+
                 try:
                     async for chunk in agent_fn(query_settings, server_settings, vector_store):
-                        # normalize to string
+                        # chunk is usually a dict from the workflow
                         if isinstance(chunk, (dict, list)):
+                            # NEW: inspect internal "event"
+                            if isinstance(chunk, dict) and chunk.get("event") == "answer":
+                                delta = (
+                                    chunk.get("structured_answer_delta")
+                                    or chunk.get("message")
+                                    or ""
+                                )
+                                assistant_buffer.append(delta)
+
                             data = json.dumps(chunk, ensure_ascii=False)
                         else:
                             data = str(chunk)
 
-                        # emit the chunk
                         yield _format_sse(data)
                         last_sent = asyncio.get_event_loop().time()
 
-                        # cooperative yield helps flushing on some servers
                         await asyncio.sleep(0)
 
-                        # opportunistic heartbeat (rarely used since we’re sending data)
                         now = asyncio.get_event_loop().time()
                         if now - last_sent >= heartbeat_interval:
-                            # SSE comment = heartbeat
                             yield ": ping\n\n"
                             last_sent = now
 
                 except (asyncio.CancelledError, GeneratorExit):
-                    # client went away; stop quietly
                     return
                 except Exception as e:
-                    # send an error event before closing
                     err = {"error": str(e)}
-                    yield _format_sse(json.dumps({"event":"error", **err}, ensure_ascii=False))
+                    yield _format_sse(json.dumps({"event": "error", **err}, ensure_ascii=False))
                 finally:
-                    # signal completion
+                    # NEW: when answer is done, store it in history
+                    full_answer = "".join(assistant_buffer).strip()
+                    if session_id and full_answer:
+                        history.append({"role": "assistant", "content": full_answer})
+                        SESSION_STORE[session_id] = history
+
+                    # done event
                     yield _format_sse(json.dumps({"event": "done"}, ensure_ascii=False))
 
             headers = {

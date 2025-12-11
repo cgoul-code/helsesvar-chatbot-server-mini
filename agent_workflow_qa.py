@@ -23,11 +23,14 @@ from langgraph.config import get_stream_writer
 class Reference(TypedDict):
     name: str
     url: str
+    icon_url: str
     relevancy_index: float
+    
     
 class State_Related(TypedDict):
     # infra
     llm: Any
+    index: VectorStoreIndex # Text-bank index
     index_related_queries: VectorStoreIndex # QA-bank index
  
     categories: List[Dict[str, Any]]
@@ -59,6 +62,7 @@ def _emit(delta: str, event: str = "systeminfo") -> None:
 
 def _fetch_answer_from_related_question(
     node_id: str,
+    index: Optional[VectorStoreIndex] = None,
     index_qa: Optional[VectorStoreIndex] = None,
 
     ) -> Optional[Tuple[str, List[Reference], str, str]]:
@@ -67,50 +71,45 @@ def _fetch_answer_from_related_question(
     and its score >= `score_threshold`, return (answer, refs). Otherwise return None.
     """
 
-    print('<1.1>')
+    
     ds_qa = index_qa.storage_context.docstore    
-    print('<1.2>')
     qa_node = ds_qa.get_node(node_id)
-    print('<1.3>')
-
-    # Best-scored node
+    
     meta = getattr(qa_node, "metadata", {}) or {}
     answer = meta.get("answer", "")
+    from_doc_id = meta.get("from_doc_id", "")
+    
+    if not answer:
+        return None
+    
+    title = ""
     url = meta.get("url", "")
-    # from_doc_id = meta.get("from_doc_id", "")
-    
-    # if from_doc_id:
-    #     text_node = ds.get_node(from_doc_id)
-    #     print(f'FOUND TEXTNODE')
-    #     if text_node:
-    #         text_meta = getattr(text_node, "metadata", {}) or {}
-    #         title = text_meta.get("title", "")
-    
-
-    title = url
-    
+    icon_url = ""
     category = meta.get("category", "")
     severity = meta.get("severity", "Green")
-
-
-
-    if not answer :
-        print('return no answer')
-        return None
-
-    # Build refs from top few
-    refs: List[Reference] = []
-    # for nws in nodes[:5]:
-    #     n = getattr(nws, "node", nws)
-    #     m = getattr(n, "metadata", {}) or {}
     
-    ## TODO: qa-bank must store title for the url-doc the question is about
-    
-    refs.append({
-        "name": url,
-        "url": title,
-        "relevancy_index": 0.0,
-    })
+    if index is not None and from_doc_id:
+        ds = index.storage_context.docstore
+        try:
+            src_doc = ds.get_document(from_doc_id)  # <-- THIS is the key
+            text_meta = getattr(src_doc, "metadata", {}) or {}
+            title = text_meta.get("title", title)
+            url = text_meta.get("url", url)
+            icon_url = text_meta.get("icon_url", icon_url)
+            category = text_meta.get("category", category)
+            severity = text_meta.get("severity", severity)
+        except Exception as e:
+            logging.warning(f"Could not fetch document {from_doc_id}: {e}")
+
+
+    refs: List[Reference] = [
+        {
+            "name": title or url or "Uten tittel",
+            "url": url,
+            "icon_url": icon_url,
+            "relevancy_index": 0.0,
+        }
+    ]
 
     return answer, refs, category, severity
 
@@ -124,9 +123,11 @@ def get_metadata_from_node_id(state: State_Related):
     """
     try:
         idx_qa = state.get("index_related_queries")
+        idx = state.get("index")
         
         result = _fetch_answer_from_related_question(
             node_id=state["from_node_id"],
+            index = idx,
             index_qa=idx_qa,
         )
         if result:
@@ -160,7 +161,7 @@ def emit_query_answer_references(state: State_Related) -> Dict[str, Any]:
     _emit("\n## Svar\n")
 
     answer = state["final_answer"]
-    print(f'Answer:<{answer}>')
+
     for line in answer.splitlines(True):
         _emit(line, event = "answer")
     _emit("\n", event = "answer")
@@ -170,9 +171,15 @@ def emit_query_answer_references(state: State_Related) -> Dict[str, Any]:
     if top5:
         #_emit("\n## Referanser\n", event = 'references')
         for r in top5:
-            bullet = f"- [{r['name']}]({r['url']}) \n"
-            _emit(bullet, event = 'references')
-            
+            name = r.get("name", "Uten tittel")
+            url = r.get("url", "#")
+            icon_url = r.get("icon_url")
+
+            if icon_url:
+                bullet = f'- [{name}]({url}) ![]({icon_url})\n'
+            else:
+                bullet = f'- [{name}]({url})\n'
+            _emit(bullet, event="references")
    
 
     return {}

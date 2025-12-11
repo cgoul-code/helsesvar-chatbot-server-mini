@@ -11,6 +11,7 @@ class QuerySettings:
         self.relevancy_cutoff = float(kwargs.get('relevancy_cutoff', 0.45))  # Default to float
         self.vectorIndex = kwargs.get('vectorIndex', "None")
         self.user_content = kwargs.get('user_content', "")
+        
         self.agent = kwargs.get('agent', "structured")
         self.related_only = kwargs.get('related_only', False)  
         self.main_category  = kwargs.get('main_category', "")  
@@ -18,6 +19,9 @@ class QuerySettings:
         self.query = kwargs.get('query', "")  
         self.from_related_q = kwargs.get('from_related_q', False)  
         self.from_node_id = kwargs.get('from_node_id', "")
+        
+        self.session_id = kwargs.get('session_id', None)
+        self.messages = kwargs.get('messages', [])
 
     def __str__(self):
         # Convert object properties to a JSON string
@@ -37,7 +41,10 @@ def get_query_settings(json_request):
         query_severity = json_request.get('query_severity', "") , 
         query = json_request.get('query', ""),
         from_related_q = json_request.get('from_related_q', False),
-        from_node_id = json_request.get('from_node_id', "")
+        from_node_id = json_request.get('from_node_id', ""),
+
+        session_id=json_request.get('session_id'),
+        messages=json_request.get('messages', []),
 
     )
     
