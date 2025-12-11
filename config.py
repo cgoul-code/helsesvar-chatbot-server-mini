@@ -15,7 +15,7 @@ from llama_index.embeddings.azure_openai import AzureOpenAIEmbedding
 
 from dotenv import load_dotenv, find_dotenv
 
-load_dotenv(find_dotenv(), override=False)
+load_dotenv(find_dotenv(), override=True)
 
 # define the namedtuple at module scope
 IndexObject = namedtuple('IndexObject', ['name', 'index', 'description'])
@@ -120,18 +120,32 @@ VECTOR_INDEX_MAP = [
     {"name": "hvaerinnafor_qa_bank", "storage": ("." if RunningLocally() else "") +"/blobstorage/chatbot/hvaerinnafor_qa_bank", "description":"Relaterte spørsmål"}
 ]
 
+# ChatGPT 5-mini
+#
+# LLMGPT4 = AzureChatOpenAI(
+#     #model=os.getenv('AZURE_OPENAI_MODEL'),
+#     #deployment_name=os.getenv('AZURE_OPENAI_DEPLOYMENT_NAME'),
+#     azure_deployment=os.getenv('AZURE_OPENAI_DEPLOYMENT_NAME'),
+#     api_version=os.getenv('AZURE_OPENAI_API_VERSION'),
+#     #api_key=os.getenv('AZURE_OPENAI_API_KEY'),
+#     azure_endpoint=os.getenv('AZURE_OPENAI_ENDPOINT'),
+#     timeout=120,
+#     reasoning_effort="minimal",
+#     verbose=True
+# )
 
+# ChatGPT4.1-mini
+#
 LLMGPT4 = AzureChatOpenAI(
-    #model=os.getenv('AZURE_OPENAI_MODEL'),
-    #deployment_name=os.getenv('AZURE_OPENAI_DEPLOYMENT_NAME'),
     azure_deployment=os.getenv('AZURE_OPENAI_DEPLOYMENT_NAME'),
     api_version=os.getenv('AZURE_OPENAI_API_VERSION'),
-    #api_key=os.getenv('AZURE_OPENAI_API_KEY'),
+    api_key=os.getenv('AZURE_OPENAI_API_KEY'),
     azure_endpoint=os.getenv('AZURE_OPENAI_ENDPOINT'),
     timeout=120,
-    reasoning_effort="minimal",
-    verbose=True
+    temperature = 0.0, 
+    verbose=True,
 )
+
 server_settings.set_llm(LLMGPT4)
 
 

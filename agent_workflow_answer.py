@@ -226,7 +226,7 @@ _POSSIBLE_META_IDS = ("doc_id", "from_doc_id", "document_id", "source_id")
 # ---------------------------------------------------------
 # Små hjelpefunksjoner
 # ---------------------------------------------------------
-def _message(delta: str, event: str = "Answer") -> None:
+def _emit(delta: str, event: str = "Answer") -> None:
     """Sender streaming-event til klient (UI)."""
     writer = get_stream_writer()
     writer({"event": event, "message": delta})
@@ -781,11 +781,11 @@ def _dedupe_references(refs: List[Reference], top_k: int = 5) -> List[Reference]
 def analyze_query(state: State_Answer) -> Dict[str, Any]:
     """Renskriver spørsmålet og avgjør om vi trenger subqueries."""
 
-    _message("Analyze and possibly rewrite user query", event="info")
-
+    _emit("Analyze and possibly rewrite user query", event="info")
+    print('<1>')
     llm = state["llm"]
     original_q = state["query"]
-
+    print(f'<2>{llm}')
     prompt = (
         "Du er en helseveileder som hjelper ungdom i Norge.\n\n"
         "Oppgave:\n"
@@ -800,6 +800,7 @@ def analyze_query(state: State_Answer) -> Dict[str, Any]:
 
     planner = llm.with_structured_output(QueryPlan)
     plan: QueryPlan = planner.invoke(prompt)
+    print('<3>')
     
 
     # Vi skriver om query i state til renskrevet versjon
@@ -811,7 +812,7 @@ def analyze_query(state: State_Answer) -> Dict[str, Any]:
 def orchestrator(state: State_Answer) -> Dict[str, Any]:
     """Planlegger – genererer delspørsmål basert på brukerens spørsmål."""
     
-    _message("Orchestrator that generates a plan for solving the question", event="info")
+    _emit("Orchestrator that generates a plan for solving the question", event="info")
 
     try:
         llm = state["llm"]
@@ -835,7 +836,7 @@ def fast_single(state: State_Answer) -> Dict[str, Any]:
     Respekterer response_validity som er satt basert på claims_report.
     """
 
-    _message("Fasttrack: answer single refined question without subqueries", event="info")
+    _emit("Fasttrack: answer single refined question without subqueries", event="info")
 
     # Lag en SubQuery med det renskrevne spørsmålet
     subq = SubQuery(
@@ -898,7 +899,7 @@ def query_grounded(state: WorkerState) -> Dict[str, Any]:
     - Generer strukturert svar med sitater
     - Verifiser sitatene mot nodene (men på en mer effektiv måte)
     """
-    _message(f"Worker answers the subquery \"{state['subquery'].subquery}\"", event="info")
+    _emit(f"Worker answers the subquery \"{state['subquery'].subquery}\"", event="info")
 
     try:
         retriever = state["retriever"]
@@ -1084,7 +1085,7 @@ def query_grounded(state: WorkerState) -> Dict[str, Any]:
 def synthesizer(state: State_Answer) -> Dict[str, Any]:
     """Sette sammen endelig svar basert på del-svarene."""
     
-    _message( "Synthesize full answer", event="info")
+    _emit( "Synthesize full answer", event="info")
 
     llm = state["llm"]
 
@@ -1171,7 +1172,7 @@ def synthesizer(state: State_Answer) -> Dict[str, Any]:
 def emit_query_answer_references(state: State_Answer) -> Dict[str, Any]:
     """Emitter endelig svar + referanser som events."""
     
-    _message( "Aggregating the final answer", event="info")
+    _emit( "Aggregating the final answer", event="info")
 
 
     q = state.get("query")
@@ -1233,7 +1234,7 @@ def emit_query_answer_references(state: State_Answer) -> Dict[str, Any]:
 def assign_workers(state: State_Answer) -> List[Send]:
     """Opprett en worker for hver delspørring."""
 
-    _message( "Assign a worker to each section in the plan", event="info")
+    _emit( "Assign a worker to each section in the plan", event="info")
     
     return [
         Send(
@@ -1359,4 +1360,4 @@ builder.add_edge("related_queries", END)
 
 answer_workflow = builder.compile()
 from graph_utils import save_mermaid_diagram
-save_mermaid_diagram(answer_workflow.get_graph())
+#save_mermaid_diagram(answer_workflow.get_graph())
