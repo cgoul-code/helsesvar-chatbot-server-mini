@@ -228,17 +228,10 @@ _POSSIBLE_META_IDS = ("doc_id", "from_doc_id", "document_id", "source_id")
 # ---------------------------------------------------------
 # Små hjelpefunksjoner
 # ---------------------------------------------------------
-def _emit(delta: str, event: str = "Answer") -> None:
-    """Sender streaming-event til klient (UI)."""
-    writer = get_stream_writer()
-    writer({"event": event, "message": delta})
-    if event == 'info':
-        logging.info(f'event: {event}, structured_answer_delta: {delta}')
+
         
 def _emit(delta: str, event: str = "systeminfo") -> None:
-    """Sender streaming-event til klient (UI)."""
-    if event == "systeminfo": return
-    
+    """Sender streaming-event til klient (UI)."""    
     writer = get_stream_writer()
     writer({"event": event, "structured_answer_delta": delta})
 
