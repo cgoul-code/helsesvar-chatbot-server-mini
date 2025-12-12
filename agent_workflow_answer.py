@@ -116,6 +116,7 @@ class State_Answer(TypedDict):
     needs_subqueries: bool  # <--- NY
     
     ''' calculated params'''
+    refined_query: str
     main_category: str
     query_severity: Literal["Green", "Yellow", "Red", ""]
     relevancy_band: str
@@ -871,7 +872,7 @@ def fast_single(state: State_Answer) -> Dict[str, Any]:
         refs = _dedupe_references(completed.references, top_k=5)
     else:
         final_answer = (
-            "Jeg beklager, men jeg kan bare svare på spørsmål basert på den gitte konteksten."
+            "Jeg har dessverre ikke informasjon om dette i kildene jeg har tilgang til."
         )
         refs = []
     # ------------------------------------------------------
@@ -917,7 +918,7 @@ def query_grounded(state: WorkerState) -> Dict[str, Any]:
         if not nodes:
             state["subquery"].response_validity = "not valid"
             state["subquery"].answer = (
-                "Jeg beklager, men jeg kan bare svare på spørsmål basert på den gitte konteksten."
+                "Jeg har dessverre ikke informasjon om dette i kildene jeg har tilgang til."
             )
             return {"completed_subqueries": [state["subquery"]],
                     "input_tokens": 0,
@@ -945,7 +946,7 @@ def query_grounded(state: WorkerState) -> Dict[str, Any]:
         if band == "Rejected":
             state["subquery"].response_validity = "not valid"
             state["subquery"].answer = (
-                "Jeg beklager, men jeg kan bare svare på spørsmål basert på den gitte konteksten."
+                "Jeg har dessverre ikke informasjon om dette i kildene jeg har tilgang til."
             )
             return {"completed_subqueries": [state["subquery"]],
                     "input_tokens": 0,
@@ -1154,7 +1155,7 @@ def synthesizer(state: State_Answer) -> Dict[str, Any]:
         # Ingen gyldige del-svar
         return {
             "final_answer": (
-                "Jeg beklager, men jeg kan bare svare på spørsmål basert på den gitte konteksten."
+                "Jeg har dessverre ikke informasjon om dette i kildene jeg har tilgang til."
             ),
             "references": [],
         }
@@ -1176,8 +1177,8 @@ def emit_query_answer_references(state: State_Answer) -> Dict[str, Any]:
 
     try:
         q = state.get("query")
-        if q:
-            _emit(json.dumps(q, ensure_ascii=False), event="Refined query")
+
+        _emit(q, event="Refined query")
 
         _emit(f"\n## Du spurte\n{state['query']}\n")
         _emit("\n## Svar\n")
