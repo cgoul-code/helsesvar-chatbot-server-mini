@@ -30,7 +30,7 @@ from rapidfuzz.fuzz import partial_ratio
 
 from registry import subqueries_prompt, GROUNDED_PROMPT
 
-from agent_shared import Reference, _emit, _node_text, _build_related_queries_retriever, _as_int, _as_float, _dedupe_references
+from agent_shared import Reference, _emit, _node_text, _build_related_queries_retriever, _as_int, _as_float, _dedupe_references, _normalize
 
 # Hvor mange noder sender vi inn i LLM-konteksten?
 MAX_NODES_FOR_CONTEXT = 8
@@ -109,6 +109,7 @@ class State_Answer(TypedDict):
     
     vector_index_description: str
     query: str
+    conversation_str: str
     from_node_id: str
     similarity_cutoff: float
     similarity_top_k: int
@@ -134,6 +135,26 @@ class State_Answer(TypedDict):
     
     input_tokens: Annotated[int, add]
     output_tokens: Annotated[int, add]
+    
+class NextIntent(BaseModel):
+    intent: str = Field(description="Kort intensjon, ikke et fullstendig spørsmål")
+    why: str
+    importance: float = Field(ge=0.0, le=1.0)
+
+class NextIntents(BaseModel):
+    intents: List[NextIntent] = Field(min_items=1, max_items=4)
+
+class CandidateScore(BaseModel):
+    node_id: str
+    score: float = Field(ge=0.0, le=1.0)
+    rationale: str
+
+class RerankResult(BaseModel):
+    ranked: List[CandidateScore]
+    
+class DialogPlan(BaseModel):
+    last_user_question: str = Field(description="Siste brukerspørsmål")
+    intents: List[NextIntent] = Field(min_items=1, max_items=4)
 
 class QueryPlan(BaseModel):
     refined_query: str = Field(
@@ -153,76 +174,6 @@ class WorkerState(TypedDict):
     retriever: BaseRetriever
     llm: Any
     
-class RelatedQueryAgent:
-    """
-    Handles the special case:
-      - from_related_q == True
-      - from_node_id is set
-    Fetches answer directly from index_related_queries and streams it.
-    """
-
-    def __init__(self, index_related_queries):
-        self.index = index_related_queries
-
-    def _get_node(self, node_id: str):
-        """
-        Look up the node in index_related_queries.
-
-        This is just a stub – adapt it to whatever your index actually is.
-        For example:
-          - if it's a dict:  return self.index.get(node_id)
-          - if it's a vector DB: search by metadata node_id
-        """
-        # EXAMPLE if index is a dict:
-        return self.index.get(node_id)
-
-    async def run(self, *, from_node_id: str, _emit):
-        """
-        _emit(event, data=None, **extra)
-        should be the same function you use in your old agent to send SSE.
-        """
-        node = self._get_node(from_node_id)
-
-        if not node:
-            await _emit(
-                event="answer",
-                structured_answer_delta="Jeg fant dessverre ikke noe svar for dette spørsmålet.",
-            )
-            await _emit(event="done")
-            return
-
-        # Tilpass disse feltene til din faktiske datastruktur
-        answer_text = (
-            node.get("answer")
-            or node.get("content")
-            or node.get("text")
-            or ""
-        )
-
-        if not answer_text.strip():
-            await _emit(
-                event="answer",
-                structured_answer_delta="Jeg fant dessverre ikke noe svar for dette spørsmålet.",
-            )
-            await _emit(event="done")
-            return
-
-        # Her kan du velge å streame stykkevis hvis du vil
-        # For enkelhet sender jeg alt i ett event
-        await _emit(
-            event="answer",
-            structured_answer_delta=answer_text,
-        )
-
-        # Hvis du også vil sende referanser/metadata fra noden, gjør det her:
-        # if "references" in node:
-        #     await _emit(
-        #         event="references",
-        #         structured_answer_delta="\n".join(node["references"]),
-        #     )
-
-        await _emit(event="done")
-
 
 _POSSIBLE_META_IDS = ("doc_id", "from_doc_id", "document_id", "source_id")
 
@@ -230,6 +181,19 @@ _POSSIBLE_META_IDS = ("doc_id", "from_doc_id", "document_id", "source_id")
 # ---------------------------------------------------------
 # Små hjelpefunksjoner
 # ---------------------------------------------------------
+
+def _make_dialog_plan(llm, history_txt: str) -> DialogPlan:
+    prompt = (
+        "Du får en samtalehistorikk i én tekststreng. Den inneholder flere tidligere spørsmål og svar.\n\n"
+        "Oppgaver:\n"
+        "1) Finn og skriv ut siste BRUKER-spørsmål (kort, uten ekstra tekst).\n"
+        "2) Foreslå 2-4 sannsynlige NESTE intensjoner som en naturlig fortsettelse i dialogen.\n"
+        "   Intensjoner skal være korte beskrivelser, ikke fullstendige spørsmål.\n"
+        "   Unngå å gjenta siste brukerspørsmål.\n\n"
+        f"Samtalehistorikk:\n{history_txt}\n"
+    )
+    print(f'<<<{prompt}>>>')
+    return llm.with_structured_output(DialogPlan).invoke(prompt)
 
 def _extract_usage_tokens(usage_meta: dict) -> tuple[int, int]:
     """Summerer input/output tokens fra UsageMetadataCallbackHandler.usage_metadata."""
@@ -296,40 +260,6 @@ def _collect_ids(node) -> List[str]:
 def _preferred_display_id(node) -> str:
     ids = _collect_ids(node)
     return ids[0] if ids else "unknown"
-
-
-
-_WS = re.compile(r"\s+")
-_TRANSLATE = str.maketrans({
-    "\u2018": "'",
-    "\u2019": "'",
-    "\u201C": '"',
-    "\u201D": '"',
-    "\u2013": "-",
-    "\u2014": "-",
-    "\u00A0": " ",
-    "\u202F": " ",
-})
-_ZERO_WIDTH = dict.fromkeys(map(ord, ["\u200B", "\u200C", "\u200D", "\u2060"]), None)
-_CONTROL_CHARS = dict.fromkeys(range(0x00, 0x20), None)
-
-
-def _normalize(
-    s: str,
-    *,
-    collapse_ws: bool = True,
-    case_sensitive: bool = False,
-) -> str:
-    """Normaliser tekst for sammenligning/søk."""
-    if not s:
-        return ""
-    s = unicodedata.normalize("NFKC", s)
-    s = s.translate(_TRANSLATE)
-    s = s.translate(_ZERO_WIDTH)
-    s = s.translate(_CONTROL_CHARS)
-    if collapse_ws:
-        s = _WS.sub(" ", s)
-    return s if case_sensitive else s.casefold()
 
 
 def _format_context_from_nodes(
@@ -655,17 +585,21 @@ def analyze_query(state: State_Answer) -> Dict[str, Any]:
     _emit("Analyze and possibly rewrite user query", event="info")
 
     llm = state["llm"]
+    
+    conversation_str = state.get("conversation_str", "")
     original_q = state["query"]
+    
     prompt = (
         "Du er en helseveileder som hjelper ungdom i Norge.\n\n"
         "Oppgave:\n"
-        "1. Skriv brukerens spørsmål om til én kort, tydelig og konkret formulering "
+        "1. Skriv brukerens siste spørsmål om til én kort, tydelig og konkret formulering "
         "på norsk, uten å endre meningen.\n"
         "2. Vurder om spørsmålet bør deles opp i flere delspørsmål for å gi et godt svar.\n"
         "   Sett needs_subqueries = True hvis:\n"
-        "   - det spørres om flere forskjellige ting/temaer, eller\n"
+        "   - det spørres om flere forskjellige ting/temaer, \n"
         "   Ellers False.\n\n"
-        f"Brukerens spørsmål:\n\"\"\"{original_q}\"\"\""
+        f"Brukeren har tidligere spurt:\n\"\"\"{conversation_str}\"\"\""
+        f"Brukerens siste spørsmål:\n\"\"\"{original_q}\"\"\""
     )
 
     planner = llm.with_structured_output(QueryPlan)
@@ -675,7 +609,7 @@ def analyze_query(state: State_Answer) -> Dict[str, Any]:
 
     # Vi skriver om query i state til renskrevet versjon
     return {
-        "query": plan.refined_query,
+        "refined_query": plan.refined_query,
         "needs_subqueries": plan.needs_subqueries,
     }
     
@@ -686,7 +620,7 @@ def orchestrator(state: State_Answer) -> Dict[str, Any]:
 
     try:
         llm = state["llm"]
-        prompt = subqueries_prompt(query=state["query"])
+        prompt = subqueries_prompt(query=state["refined_query"])
 
         planner = llm.with_structured_output(SubQueries)
         report_queries: SubQueries = planner.invoke(prompt)
@@ -710,7 +644,7 @@ def fast_single(state: State_Answer) -> Dict[str, Any]:
 
     # Lag en SubQuery med det renskrevne spørsmålet
     subq = SubQuery(
-        subquery=state["query"],
+        subquery=state["refined_query"],
         answer="",
         references=[],
         response_validity="not valid",
@@ -984,7 +918,7 @@ def synthesizer(state: State_Answer) -> Dict[str, Any]:
                             "Du er en vennlig, empatisk og kunnskapsrik helseveileder laget for å hjelpe ungdom i Norge (alder 13–19 år).\n\n"
                             "Din oppgave er å sette sammen et enkelt, helhetlig og sammenhengende svar på norsk (bokmål) "
                             "**kun basert på den gitte listen med del-svar**.\n"
-                            "Du skal **ikke finne på, omformulere eller legge til ny informasjon, påstander, forklaringer "
+                            "Du skal **ikke finne på eller legge til ny informasjon, påstander, forklaringer "
                             "eller råd** som ikke uttrykkelig finnes i den gitte teksten.\n"
                             "Hvis noe mangler, er uklart eller motsier seg selv, skal du bare utelate det.\n\n"
                             "Målet ditt:\n"
@@ -1045,11 +979,11 @@ def emit_query_answer_references(state: State_Answer) -> Dict[str, Any]:
     _emit( "Aggregating the final answer", event="info")
 
     try:
-        q = state.get("query")
+        q = state.get("refined_query")
 
         _emit(q, event="Refined query")
 
-        _emit(f"\n## Du spurte\n{state['query']}\n")
+        _emit(f"\n## Du spurte\n{state['refined_query']}\n")
         _emit("\n## Svar\n")
 
         answer = state["final_answer"]
@@ -1145,7 +1079,7 @@ def related_queries(state: State_Answer) -> dict:
             main_category=state.get("main_category"),        # may be None → ignored
         )
 
-        results = retriever.retrieve(state["query"])
+        results = retriever.retrieve(state["refined_query"])
 
         if results:
             def score_or_min(r):
@@ -1202,6 +1136,108 @@ def related_queries(state: State_Answer) -> dict:
         
     return {"related_queries": related_queries}
 
+def related_queries_dialog_from_query(state: State_Answer) -> dict:
+    _emit("Find dialog-driven related queries (query contains full history)", event="info")
+
+    llm = state["llm"]
+    
+    conversation_str = state.get("conversation_str")
+    last_query = state.get("refined_query")
+      
+    print(f'<<<history: {conversation_str}>>>')
+    if not conversation_str:
+        _emit("[]", event="related queries")
+        return {"related_queries": []}
+
+    # (valgfritt) kutt litt for kost: siste ~8000 tegn
+    conversation_str = conversation_str[-8000:]
+
+    # 1) Plan: last question + next intents
+    plan = _make_dialog_plan(llm, conversation_str)
+    last_user_q = (plan.last_user_question or "").strip()
+    intent_texts = [i.intent for i in (plan.intents or [])][:4]
+    
+    print(f'\n----------\n<<<plan:{plan}\nlast_user_q:{last_user_q}\nintent_texts:{intent_texts}>>>')
+
+    # 2) Retrieve kandidater per intent
+    retriever = _build_related_queries_retriever(
+        index_qa_bank=state["index_related_queries"],
+        top_k=10,
+        cutoff=0.0,  # hent bredt, la rerank bestemme
+        query_severity=state.get("query_severity"),
+        main_category=state.get("main_category"),
+    )
+
+    candidates = {}  # node_id -> candidate
+    for intent in intent_texts:
+        results = retriever.retrieve(intent) or []
+        for r in results:
+            node = getattr(r, "node", r)
+            meta = getattr(node, "metadata", {}) or {}
+            node_id = getattr(node, "node_id", getattr(node, "id_", "")) or ""
+            text = _node_text(node).strip()
+            if not node_id or not text:
+                continue
+
+            # hard-exclude: ikke foreslå nesten samme som siste brukerspørsmål
+            if last_user_q and partial_ratio(_normalize(text), _normalize(last_user_q)) > 92:
+                continue
+
+            if node_id not in candidates:
+                doc_id = meta.get("from_doc_id", node_id)
+                candidates[node_id] = {
+                    "id": str(doc_id),
+                    "node_id": str(node_id),
+                    "text": text,
+                    "severity": meta.get("severity", ""),
+                }
+
+    cand_list = list(candidates.values())
+    if not cand_list:
+        _emit("[]", event="related queries")
+        return {"related_queries": []}
+
+    # 3) Rerank på “naturlig fortsettelse”
+    cand_list = cand_list[:24]
+    cand_block = "\n".join([f"- node_id={c['node_id']}\n  q={c['text']}" for c in cand_list])
+
+    rerank_prompt = (
+        "Du skal velge hvilke kandidatspørsmål fra en spørsmålsbank som er den mest NATURLIGE "
+        "fortsettelsen i dialogen.\n\n"
+        "Gi score 0–1 basert på:\n"
+        "- Dialogfit: naturlig neste steg gitt historikken\n"
+        "- Ikke repetisjon av siste brukerspørsmål\n"
+        "- Fremdrift: avklaring/tiltak/risiko/når søke hjelp\n"
+        "- Unngå duplikater\n\n"
+        f"Siste brukerspørsmål: {last_user_q!r}\n\n"
+        f"Samtalehistorikk:\n{conversation_str}\n\n"
+        f"Kandidatspørsmål:\n{cand_block}\n"
+    )
+
+    reranked: RerankResult = llm.with_structured_output(RerankResult).invoke(rerank_prompt)
+    score_map = {x.node_id: x.score for x in (reranked.ranked or [])}
+    cand_list.sort(key=lambda c: score_map.get(c["node_id"], 0.0), reverse=True)
+
+    # 4) Velg maks 3 med enkel diversitet
+    picked = []
+    used_norm = set()
+    for c in cand_list:
+        if len(picked) >= 3:
+            break
+        norm = _normalize(c["text"])
+        if any(partial_ratio(norm, u) > 90 for u in used_norm):
+            continue
+        picked.append(c)
+        used_norm.add(norm)
+
+    related_queries = [
+        {"keyword": p.get("severity", ""), "query": p["text"], "node_id": p["node_id"]}
+        for p in picked
+    ]
+
+    _emit(json.dumps(related_queries, ensure_ascii=False), event="related queries")
+    return {"related_queries": related_queries}
+
 # ---------------------------------------------------------
 # Bygg workflow
 # ---------------------------------------------------------
@@ -1215,7 +1251,7 @@ builder.add_node("orchestrator", orchestrator)
 builder.add_node("query_grounded", query_grounded)
 builder.add_node("synthesizer", synthesizer, join=True)
 builder.add_node("emit_query_answer_references", emit_query_answer_references)
-builder.add_node("related_queries", related_queries)
+builder.add_node("related_queries_dialog_from_query", related_queries_dialog_from_query)
 
 # Start → analyse
 builder.add_edge(START, "analyze_query")
@@ -1236,9 +1272,9 @@ builder.add_edge("synthesizer", "emit_query_answer_references")
 builder.add_edge("fast_single", "emit_query_answer_references")
 
 # Videre er likt for begge ruter
-builder.add_edge("emit_query_answer_references", "related_queries")
-builder.add_edge("related_queries", END)
+builder.add_edge("emit_query_answer_references", "related_queries_dialog_from_query")
+builder.add_edge("related_queries_dialog_from_query", END)
 
 answer_workflow = builder.compile()
 from graph_utils import save_mermaid_diagram
-#save_mermaid_diagram(answer_workflow.get_graph())
+save_mermaid_diagram(answer_workflow.get_graph())

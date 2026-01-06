@@ -1,6 +1,8 @@
 from quart import request, Response
 import logging, json, asyncio
+from typing import Any, Dict, List, Optional, Tuple
 from config import server_settings, vector_store
+import secrets
 from query_utils import get_query_settings
 from answer_utils import (
     get_answer_as_stream, get_related_qa_as_stream
@@ -26,24 +28,90 @@ def _format_sse(data: str, event: str | None = None) -> str:
     return "\n".join(lines)
 
 def register_routes(app):
+    def _cors_preflight():
+        return Response(
+            "",
+            headers={
+                "Access-Control-Allow-Origin": "*",
+                "Access-Control-Allow-Headers": "Content-Type, Accept",
+                "Access-Control-Allow-Methods": "POST, OPTIONS",
+            },
+        )
+
+    def _is_duplicate_last(history: List[Dict[str, str]], msg: Dict[str, str]) -> bool:
+        """Return True hvis msg er identisk med siste element i history."""
+        if not history:
+            return False
+        last = history[-1]
+        return (
+            (last.get("role") == msg.get("role"))
+            and (last.get("content") == msg.get("content"))
+        )
+
+    def _get_or_create_session_id(query_settings, payload: Dict[str, Any]) -> str:
+        session_id = getattr(query_settings, "session_id", None) or payload.get("session_id")
+        if not session_id:
+            session_id = secrets.token_hex(8)
+        query_settings.session_id = session_id
+        return session_id
+
+    def _load_history(session_id: str) -> List[Dict[str, str]]:
+        # copy for å unngå utilsiktet mutasjon via referanser
+        return list(SESSION_STORE.get(session_id, []))
+
+    def _extract_last_user_message(payload: Dict[str, Any]) -> Optional[Dict[str, str]]:
+        """
+        Vi antar payload["messages"] kan være:
+          - hele historikken
+          - bare nye meldinger
+          - bare siste user
+        Vi vil KUN ta med siste user-melding her.
+        """
+        msgs = payload.get("messages", [])
+        if not isinstance(msgs, list) or not msgs:
+            return None
+
+        last = msgs[-1]
+        if not isinstance(last, dict):
+            return None
+
+        if last.get("role") != "user":
+            # Hvis klient sender både user+assistant, kan siste være assistant.
+            # Finn siste user bakover.
+            for m in reversed(msgs):
+                if isinstance(m, dict) and m.get("role") == "user":
+                    return m
+            return None
+
+        return last
+
+    def _store_user_message(session_id: str, history: List[Dict[str, str]], user_msg: Optional[Dict[str, str]]) -> List[Dict[str, str]]:
+        if user_msg and user_msg.get("content"):
+            if not _is_duplicate_last(history, user_msg):
+                history.append({"role": "user", "content": user_msg["content"]})
+        SESSION_STORE[session_id] = history
+        return history
+
+    def _store_assistant_message(session_id: str, history: List[Dict[str, str]], assistant_text: str) -> List[Dict[str, str]]:
+        assistant_text = (assistant_text or "").strip()
+        if assistant_text:
+            msg = {"role": "assistant", "content": assistant_text}
+            if not _is_duplicate_last(history, msg):
+                history.append(msg)
+        SESSION_STORE[session_id] = history
+        return history
+
     @app.route("/chat", methods=["POST", "OPTIONS"])
     async def chat():
-        # Simple CORS (adjust as needed)
+        # CORS preflight
         if request.method == "OPTIONS":
-            return Response(
-                "",
-                headers={
-                    "Access-Control-Allow-Origin": "*",
-                    "Access-Control-Allow-Headers": "Content-Type, Accept",
-                    "Access-Control-Allow-Methods": "POST, OPTIONS",
-                },
-            )
+            return _cors_preflight()
 
         # Index readiness
         status, indexes_loaded = server_settings.get_status()
         if not indexes_loaded:
             logging.warning("Indexes are still loading...")
-            logging.info(f"Server status: {status}")
+            logging.info("Server status: %s", status)
             return {"error": "Indexes are still loading, please try again later."}, 503
 
         try:
@@ -51,28 +119,21 @@ def register_routes(app):
             logging.info("Received /chat payload: %r", payload)
 
             query_settings = get_query_settings(payload)
-            
+
             # 1) resolve / create session_id
-            session_id = query_settings.session_id or payload.get("session_id")
-            if not session_id:
-                # very simple: generate one (in prod you’d use uuid4)
-                import secrets
-                session_id = secrets.token_hex(8)
-            query_settings.session_id = session_id
+            session_id = _get_or_create_session_id(query_settings, payload)
 
-            # 2) load existing history or start fresh
-            history = SESSION_STORE.get(session_id, [])
+            # 2) load existing history
+            history = _load_history(session_id)
 
-            # 3) merge client messages into history:
-            #    (here I assume payload.messages are the new messages since last time,
-            #     or you can trust them fully and just store them)
-            new_messages = payload.get("messages", [])
-            history.extend(new_messages)
-            SESSION_STORE[session_id] = history
+            # 3) append ONLY the latest user message from payload
+            last_user_msg = _extract_last_user_message(payload)
+            history = _store_user_message(session_id, history, last_user_msg)
 
-            # 4) pass full history into agent via query_settings
+            # 4) pass full server-side history into agent
             query_settings.messages = history
-                
+
+            # Agent resolution
             agent_name = getattr(query_settings, "agent", None)
             agent_fn = AGENT_REGISTRY.get(agent_name)
             if agent_fn is None:
@@ -80,37 +141,37 @@ def register_routes(app):
                 return {"error": f"Unknown agent '{agent_name}'"}, 400
 
             async def stream_answer():
-                yield _format_sse(json.dumps({"event": "open", "message": "ok"}, ensure_ascii=False))
+                yield _format_sse(json.dumps({"event": "open", "message": "ok", "session_id": session_id}, ensure_ascii=False))
 
                 heartbeat_interval = 20
                 last_sent = asyncio.get_event_loop().time()
 
-                # NEW: get session + history (assuming you added it earlier)
-                session_id = getattr(query_settings, "session_id", None)
-                history = SESSION_STORE.get(session_id, [])
+                # IMPORTANT: hent fersk historikk (copy) for denne streamen
+                stream_history = _load_history(session_id)
 
-                assistant_buffer: list[str] = []
+                assistant_buffer: List[str] = []
 
                 try:
                     async for chunk in agent_fn(query_settings, server_settings, vector_store):
-                        # chunk is usually a dict from the workflow
-                        if isinstance(chunk, (dict, list)):
-                            # NEW: inspect internal "event"
-                            if isinstance(chunk, dict) and chunk.get("event") == "answer":
+                        # chunk er ofte dict-event fra workflowen
+                        if isinstance(chunk, dict):
+                            if chunk.get("event") == "answer":
                                 delta = (
                                     chunk.get("structured_answer_delta")
                                     or chunk.get("message")
                                     or ""
                                 )
-                                assistant_buffer.append(delta)
+                                if delta:
+                                    assistant_buffer.append(delta)
 
                             data = json.dumps(chunk, ensure_ascii=False)
                         else:
                             data = str(chunk)
 
                         yield _format_sse(data)
-                        last_sent = asyncio.get_event_loop().time()
 
+                        # heartbeat bookkeeping
+                        last_sent = asyncio.get_event_loop().time()
                         await asyncio.sleep(0)
 
                         now = asyncio.get_event_loop().time()
@@ -121,30 +182,28 @@ def register_routes(app):
                 except (asyncio.CancelledError, GeneratorExit):
                     return
                 except Exception as e:
-                    err = {"error": str(e)}
-                    yield _format_sse(json.dumps({"event": "error", **err}, ensure_ascii=False))
+                    logging.error("Error while streaming agent output", exc_info=True)
+                    yield _format_sse(json.dumps({"event": "error", "error": str(e)}, ensure_ascii=False))
                 finally:
-                    # NEW: when answer is done, store it in history
+                    # 5) store assistant full answer ONCE
                     full_answer = "".join(assistant_buffer).strip()
-                    if session_id and full_answer:
-                        history.append({"role": "assistant", "content": full_answer})
-                        SESSION_STORE[session_id] = history
+                    if session_id:
+                        # hent siste historikk igjen i tilfelle andre forespørsler har skrevet
+                        final_history = _load_history(session_id)
+                        _store_assistant_message(session_id, final_history, full_answer)
 
-                    # done event
                     yield _format_sse(json.dumps({"event": "done"}, ensure_ascii=False))
 
             headers = {
                 "Content-Type": "text/event-stream; charset=utf-8",
                 "Cache-Control": "no-cache",
                 "Connection": "keep-alive",
-                "X-Accel-Buffering": "no",  # important behind nginx
-                "Access-Control-Allow-Origin": "*",  # if you need CORS
+                "X-Accel-Buffering": "no",
+                "Access-Control-Allow-Origin": "*",
             }
             return Response(stream_answer(), headers=headers)
 
         except Exception as e:
             logging.error("Error in /chat handler", exc_info=True)
-            status = getattr(e, "code", 500)
-            return {"error": str(e)}, status
-        
-        
+            status_code = getattr(e, "code", 500)
+            return {"error": str(e)}, status_code

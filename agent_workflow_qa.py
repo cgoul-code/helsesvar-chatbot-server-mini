@@ -5,8 +5,8 @@ from operator import add
 from typing import Any, Dict, List, Literal, Optional, Tuple
 
 from typing_extensions import TypedDict
-
-
+from pydantic import BaseModel, Field
+from rapidfuzz.fuzz import partial_ratio
 
 from llama_index.core import VectorStoreIndex
 from llama_index.core.retrievers import BaseRetriever
@@ -14,7 +14,7 @@ from llama_index.core.vector_stores import MetadataFilter, MetadataFilters, Filt
 
 from langgraph.graph import StateGraph, START, END
 from langgraph.config import get_stream_writer
-from agent_shared import Reference, _emit, _node_text, _build_related_queries_retriever, _as_int, _as_float, _dedupe_references
+from agent_shared import Reference, _emit, _node_text, _build_related_queries_retriever, _as_int, _as_float, _dedupe_references, _normalize
 
 
 
@@ -39,7 +39,7 @@ class State_Related(TypedDict):
 
     # query context
     query: str
-
+    conversation_str: str
 
     # how we got here
     from_related_q: bool        # True if user clicked a related Q
@@ -54,8 +54,43 @@ class State_Related(TypedDict):
     query_severity: Literal["Green", "Yellow", "Red", ""]
     references: List[Reference]
     final_answer: str
+    
+class NextIntent(BaseModel):
+    intent: str = Field(description="Kort intensjon, ikke et fullstendig spørsmål")
+    why: str
+    importance: float = Field(ge=0.0, le=1.0)
 
+class NextIntents(BaseModel):
+    intents: List[NextIntent] = Field(min_items=1, max_items=4)
 
+class CandidateScore(BaseModel):
+    node_id: str
+    score: float = Field(ge=0.0, le=1.0)
+    rationale: str
+
+class RerankResult(BaseModel):
+    ranked: List[CandidateScore]
+    
+class DialogPlan(BaseModel):
+    last_user_question: str = Field(description="Siste brukerspørsmål")
+    intents: List[NextIntent] = Field(min_items=1, max_items=4)
+    
+# ---------------------------------------------------------
+# Små hjelpefunksjoner
+# ---------------------------------------------------------
+
+def _make_dialog_plan(llm, history_txt: str) -> DialogPlan:
+    prompt = (
+        "Du får en samtalehistorikk i én tekststreng. Den inneholder flere tidligere spørsmål og svar.\n\n"
+        "Oppgaver:\n"
+        "1) Finn og skriv ut siste BRUKER-spørsmål (kort, uten ekstra tekst).\n"
+        "2) Foreslå 2-4 sannsynlige NESTE intensjoner som en naturlig fortsettelse i dialogen.\n"
+        "   Intensjoner skal være korte beskrivelser, ikke fullstendige spørsmål.\n"
+        "   Unngå å gjenta siste brukerspørsmål.\n\n"
+        f"Samtalehistorikk:\n{history_txt}\n"
+    )
+    print(f'<<<{prompt}>>>')
+    return llm.with_structured_output(DialogPlan).invoke(prompt)
 
 def _fetch_answer_from_related_question(
     node_id: str,
@@ -253,6 +288,108 @@ def related_queries(state: State_Related) -> dict:
         
     return {}
 
+def related_queries_dialog_from_query(state: State_Related) -> dict:
+    _emit("Find dialog-driven related queries (query contains full history)", event="info")
+
+    llm = state["llm"]
+    
+    conversation_str = state.get("conversation_str")
+    last_query = state.get("refined_query")
+      
+    print(f'<<<history: {conversation_str}>>>')
+    if not conversation_str:
+        _emit("[]", event="related queries")
+        return {"related_queries": []}
+
+    # (valgfritt) kutt litt for kost: siste ~8000 tegn
+    conversation_str = conversation_str[-8000:]
+
+    # 1) Plan: last question + next intents
+    plan = _make_dialog_plan(llm, conversation_str)
+    last_user_q = (plan.last_user_question or "").strip()
+    intent_texts = [i.intent for i in (plan.intents or [])][:4]
+    
+    print(f'\n----------\n<<<plan:{plan}\nlast_user_q:{last_user_q}\nintent_texts:{intent_texts}>>>')
+
+    # 2) Retrieve kandidater per intent
+    retriever = _build_related_queries_retriever(
+        index_qa_bank=state["index_related_queries"],
+        top_k=10,
+        cutoff=0.0,  # hent bredt, la rerank bestemme
+        query_severity=state.get("query_severity"),
+        main_category=state.get("main_category"),
+    )
+
+    candidates = {}  # node_id -> candidate
+    for intent in intent_texts:
+        results = retriever.retrieve(intent) or []
+        for r in results:
+            node = getattr(r, "node", r)
+            meta = getattr(node, "metadata", {}) or {}
+            node_id = getattr(node, "node_id", getattr(node, "id_", "")) or ""
+            text = _node_text(node).strip()
+            if not node_id or not text:
+                continue
+
+            # hard-exclude: ikke foreslå nesten samme som siste brukerspørsmål
+            if last_user_q and partial_ratio(_normalize(text), _normalize(last_user_q)) > 92:
+                continue
+
+            if node_id not in candidates:
+                doc_id = meta.get("from_doc_id", node_id)
+                candidates[node_id] = {
+                    "id": str(doc_id),
+                    "node_id": str(node_id),
+                    "text": text,
+                    "severity": meta.get("severity", ""),
+                }
+
+    cand_list = list(candidates.values())
+    if not cand_list:
+        _emit("[]", event="related queries")
+        return {"related_queries": []}
+
+    # 3) Rerank på “naturlig fortsettelse”
+    cand_list = cand_list[:24]
+    cand_block = "\n".join([f"- node_id={c['node_id']}\n  q={c['text']}" for c in cand_list])
+
+    rerank_prompt = (
+        "Du skal velge hvilke kandidatspørsmål fra en spørsmålsbank som er den mest NATURLIGE "
+        "fortsettelsen i dialogen.\n\n"
+        "Gi score 0–1 basert på:\n"
+        "- Dialogfit: naturlig neste steg gitt historikken\n"
+        "- Ikke repetisjon av siste brukerspørsmål\n"
+        "- Fremdrift: avklaring/tiltak/risiko/når søke hjelp\n"
+        "- Unngå duplikater\n\n"
+        f"Siste brukerspørsmål: {last_user_q!r}\n\n"
+        f"Samtalehistorikk:\n{conversation_str}\n\n"
+        f"Kandidatspørsmål:\n{cand_block}\n"
+    )
+
+    reranked: RerankResult = llm.with_structured_output(RerankResult).invoke(rerank_prompt)
+    score_map = {x.node_id: x.score for x in (reranked.ranked or [])}
+    cand_list.sort(key=lambda c: score_map.get(c["node_id"], 0.0), reverse=True)
+
+    # 4) Velg maks 3 med enkel diversitet
+    picked = []
+    used_norm = set()
+    for c in cand_list:
+        if len(picked) >= 3:
+            break
+        norm = _normalize(c["text"])
+        if any(partial_ratio(norm, u) > 90 for u in used_norm):
+            continue
+        picked.append(c)
+        used_norm.add(norm)
+
+    related_queries = [
+        {"keyword": p.get("severity", ""), "query": p["text"], "node_id": p["node_id"]}
+        for p in picked
+    ]
+
+    _emit(json.dumps(related_queries, ensure_ascii=False), event="related queries")
+    return {}
+
 # ---------------------------------------------------------
 # Bygg workflow
 # ---------------------------------------------------------
@@ -261,12 +398,12 @@ builder = StateGraph(State_Related)
 
 builder.add_node("get_metadata_from_node_id", get_metadata_from_node_id)
 builder.add_node("emit_query_answer_references", emit_query_answer_references)
-builder.add_node("related_queries", related_queries)
+builder.add_node("related_queries_dialog_from_query", related_queries_dialog_from_query)
 
 
 builder.add_edge(START, "get_metadata_from_node_id")
 builder.add_edge("get_metadata_from_node_id", "emit_query_answer_references")
-builder.add_edge("emit_query_answer_references", "related_queries")
-builder.add_edge("related_queries", END)
+builder.add_edge("emit_query_answer_references", "related_queries_dialog_from_query")
+builder.add_edge("related_queries_dialog_from_query", END)
 
 related_qa_workflow = builder.compile()
