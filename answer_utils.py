@@ -142,16 +142,16 @@ async def get_answer_as_stream(
     # Extract last user question (already done in QuerySettings)
     last_question = query_settings.user_content or query_settings.query
   
-      # Combine for the workflow:
-    if conversation_str:
-        full_query = (
-            f"Tidligere samtale mellom bruker og veileder:\n"
-            f"{conversation_str}\n\n"
-            f"Siste spørsmål fra bruker som du skal svare på nå:\n"
-            f"{last_question}"
-        )
-    else:
-        full_query = last_question
+    #   # Combine for the workflow:
+    # if conversation_str:
+    #     full_query = (
+    #         f"Tidligere samtale mellom bruker og veileder:\n"
+    #         f"{conversation_str}\n\n"
+    #         f"Siste spørsmål fra bruker som du skal svare på nå:\n"
+    #         f"{last_question}"
+    #     )
+    # else:
+    #     full_query = last_question
   
     print('------------->>get_answer')
     # 1) Try to load the requested index
@@ -187,42 +187,34 @@ async def get_answer_as_stream(
     # 2) Build your prompt template
     text_qa_template = ChatPromptTemplate([
 
-        ChatMessage(
-            role=MessageRole.SYSTEM,
-            content=(
-                # "You are 'HelseSvar', a friendly, empathetic, and knowledgeable health advisor, specifically designed to help young people in Norway (ages 13-19).\n\n"
-                # "Your primary goal is to provide clear, supportive, and easy-to-understand answers to their health questions.\n\n"
-                # "**Tone and Style Guidelines:**\n"
-                # "1.  **Empathy:** Always respond with understanding and support. Acknowledge the user's feelings if they express worry, confusion, or distress (e.g., 'I understand this can be a concern,' or 'It's normal to have questions about this.'). Be reassuring and non-judgmental.\n"
-                # "2.  **Teen-Friendly Language (Ages 13-19):** \n"
-                # "    - Explain things clearly and directly. Avoid overly medical jargon or complex terminology. If you must use a technical term, explain it immediately in simple words.\n"
-                # "    - Use short sentences and paragraphs. Break down complex information.\n"
-                # "    - Maintain a friendly, approachable, and encouraging tone. Imagine you're talking to a smart but not yet expert high school student.\n"
-                # "    - Example of simplification: Instead of 'The symptomatology typically manifests as...', say 'Usually, you might notice symptoms like...'.\n\n"
-                # "**Core Rules for Answering:**\n"
-                # "- Always answer the request using ONLY the provided context information. Do not use any prior knowledge.\n"
-                # "- Provide detailed explanations from the context, but avoid unnecessary repetitions.\n"
-                # "- Always answer in Norwegian (Bokmål).\n"
-                # "- If the context doesn't cover the question, clearly state that the information isn't available in the provided articles."
-
-                "You are a helpful advisor anwering in norwegian (bokmål). Use ONLY the 'context' below."
-                "- If something is not found in the context, answer \"I don’t know based on the sources.\""
-                "- Every statement must have at least one source in 'citations.'"
-                "- Do not introduce any information that is not present in the context."
-            )
-        ),
-        ChatMessage(
-            role=MessageRole.USER,
-            content=(
-                "Context information is below.\n"
-                "---------------------\n"
-                "{context_str}\n"
-                "---------------------\n"
-                "Given the context information and not prior knowledge, "
-                "Query: {query_str}\n"
-                "Answer: "
-            ),
-        ),
+      ChatMessage(
+          role=MessageRole.SYSTEM,
+          content=(
+              "Du er en hjelpsom og nøyaktig veileder som svarer på norsk (bokmål).\n\n"
+              "VIKTIGE REGLER:\n"
+              "- Du skal bruke SAMTALEHISTORIKKEN kun for å forstå sammenhengen og hva brukeren mener.\n"
+              "- Du skal bruke KUN 'konteksten' nedenfor som faktagrunnlag når du svarer.\n"
+              "- Hvis svaret ikke finnes i konteksten, svar nøyaktig: \"Det vet jeg ikke basert på kildene.\"\n"
+              "- Hver faktapåstand i svaret må ha minst én kilde i 'citations'.\n"
+              "- Ikke legg til, anta eller forklare noe som ikke står eksplisitt i konteksten.\n"
+          )
+      ),
+      ChatMessage(
+          role=MessageRole.USER,
+          content=(
+              "SAMTALEHISTORIKK (kun for kontekst, ikke som faktagrunnlag):\n"
+              "---------------------\n"
+              "{conversation_str}\n"
+              "---------------------\n\n"
+              "KONTEKSTINFORMASJON (dette er eneste faktagrunnlag):\n"
+              "---------------------\n"
+              "{context_str}\n"
+              "---------------------\n\n"
+              "Spørsmål:\n"
+              "{query_str}\n\n"
+              "Svar:"
+          ),
+      ),
     ])
 
 
@@ -311,6 +303,9 @@ async def get_answer_as_stream(
 
 
     # 5) Initialize and run your optimizer workflow
+    
+    print(f'q: {last_question}')
+    print(f'hist:{conversation_str}')
     init_state: State_Answer = {
         "llm": server_settings.llm,
         "index" : index,
@@ -318,8 +313,8 @@ async def get_answer_as_stream(
         "retriever": retriever,
         "vector_index_description": vector_index_description,
         #"query": query_settings.user_content,
-        "query": full_query,
-        
+        "query": last_question,
+        "conversation_str": conversation_str,
         "index_related_queries" :index_qa_bank,
         "retriever_related_queries" : retriever_related_queries,
         
@@ -341,7 +336,12 @@ async def get_answer_as_stream(
         "final_answer": "",
         "input_tokens": 0,
         "output_tokens": 0,
+        "refined_query": "",
+        "needs_subqueries": False,
+        "main_category": "",
+        "query_severity": "",
     }
+
 
 
 
@@ -384,6 +384,26 @@ async def get_related_qa_as_stream(
         )
     index_qa_bank: VectorStoreIndex = entry_qa_bank.index
     
+    history = query_settings.messages or []
+    convo_lines = []
+    for m in history:
+        role = m.get("role", "user")
+        content = m.get("content", "")
+        if not content:
+            continue
+        if role == "user":
+            convo_lines.append(f"Bruker: {content}")
+        elif role == "assistant":
+            convo_lines.append(f"Veileder: {content}")
+        else:
+            convo_lines.append(f"{role}: {content}")
+
+    conversation_str = "\n".join(convo_lines)
+
+    # Extract last user question (already done in QuerySettings)
+    last_question = query_settings.user_content or query_settings.query
+  
+    
 
     # 2) Initialize and run your optimizer workflow
     init_state: State_Related = {
@@ -391,7 +411,8 @@ async def get_related_qa_as_stream(
         "index": index,
         "index_related_queries" : index_qa_bank,
         "categories": categories,
-        "query": query_settings.user_content,
+        "query": last_question,
+        "conversation_str" : conversation_str,
         "from_node_id": query_settings.from_node_id,
         
         "similarity_cutoff": query_settings.similarity_cutoff,

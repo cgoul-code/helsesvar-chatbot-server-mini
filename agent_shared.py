@@ -1,10 +1,26 @@
 import json
 from typing import Any, Dict, List, Optional, TypedDict
+import re
+import unicodedata
 
 from langgraph.config import get_stream_writer
 from llama_index.core import VectorStoreIndex
 from llama_index.core.retrievers import BaseRetriever
 from llama_index.core.vector_stores import MetadataFilter, MetadataFilters, FilterOperator
+
+_WS = re.compile(r"\s+")
+_TRANSLATE = str.maketrans({
+    "\u2018": "'",
+    "\u2019": "'",
+    "\u201C": '"',
+    "\u201D": '"',
+    "\u2013": "-",
+    "\u2014": "-",
+    "\u00A0": " ",
+    "\u202F": " ",
+})
+_ZERO_WIDTH = dict.fromkeys(map(ord, ["\u200B", "\u200C", "\u200D", "\u2060"]), None)
+_CONTROL_CHARS = dict.fromkeys(range(0x00, 0x20), None)
 
 
 class Reference(TypedDict):
@@ -95,3 +111,20 @@ def _dedupe_references(refs: List[Reference], top_k: int = 5) -> List[Reference]
         if len(out) >= top_k:
             break
     return out
+
+def _normalize(
+    s: str,
+    *,
+    collapse_ws: bool = True,
+    case_sensitive: bool = False,
+) -> str:
+    """Normaliser tekst for sammenligning/søk."""
+    if not s:
+        return ""
+    s = unicodedata.normalize("NFKC", s)
+    s = s.translate(_TRANSLATE)
+    s = s.translate(_ZERO_WIDTH)
+    s = s.translate(_CONTROL_CHARS)
+    if collapse_ws:
+        s = _WS.sub(" ", s)
+    return s if case_sensitive else s.casefold()

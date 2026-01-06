@@ -525,7 +525,7 @@ def subquery_orchestrator(state: State_AnswerWithRelatedQueries) -> dict:
         planner = llm.with_structured_output(SubQueries)
         plan: SubQueries = planner.invoke([
             # keep instructions Norwegian-focused as in your second agent
-            {"role": "system", "content": "Refraser brukerens spørsmål til ett eller flere delspørsmål (norsk). Ikke svar delspørsmålene."},
+            {"role": "system", "content": "Omformuler brukerens spørsmål til ett eller flere delspørsmål (norsk). Ikke svar delspørsmålene."},
             {"role": "user", "content": f"Her er brukerens spørsmål: {state['refined_query'] or state['query']}"}
         ])
         

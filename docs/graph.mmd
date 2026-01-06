@@ -11,17 +11,17 @@ graph TD;
 	query_grounded(query_grounded)
 	synthesizer(synthesizer)
 	emit_query_answer_references(emit_query_answer_references)
-	related_queries(related_queries)
+	related_queries_dialog_from_query(related_queries_dialog_from_query)
 	__end__([<p>__end__</p>]):::last
 	__start__ --> analyze_query;
 	analyze_query -.-> fast_single;
 	analyze_query -.-> orchestrator;
-	emit_query_answer_references --> related_queries;
+	emit_query_answer_references --> related_queries_dialog_from_query;
 	fast_single --> emit_query_answer_references;
 	orchestrator -.-> query_grounded;
 	query_grounded --> synthesizer;
 	synthesizer --> emit_query_answer_references;
-	related_queries --> __end__;
+	related_queries_dialog_from_query --> __end__;
 	classDef default fill:#f2f0ff,line-height:1.2
 	classDef first fill-opacity:0
 	classDef last fill:#bfb6fc

@@ -67,7 +67,7 @@ def orchestrator(state: State_SubqueryOrchestrator):
 
     report_queries = planner.invoke(
         [
-            SystemMessage(content="Refrase the user query generating a subquery in norwegian. If the user query har several queries, generate several subqueries. Do not answer the subqueries"),
+            SystemMessage(content="Rephrase the user query generating a subquery in norwegian. If the user query har several queries, generate several subqueries. Do not answer the subqueries"),
             HumanMessage(content=f"Here is query from a user: {state['query']}"),
         ]
     )
