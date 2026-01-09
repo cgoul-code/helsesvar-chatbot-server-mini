@@ -8,6 +8,7 @@ from llama_index.core.llms import ChatMessage, MessageRole
 from llama_index.core import ChatPromptTemplate, get_response_synthesizer, VectorStoreIndex
 from typing import Literal
 import logging
+import asyncio
 
 categories = [
   {
@@ -122,6 +123,7 @@ async def get_answer_as_stream(
     server_settings: ServerSettings,
     vector_store: VectorIndexStore
 ):
+  try:
     # Build a conversation string from messages (if any)
     history = query_settings.messages or []
     convo_lines = []
@@ -278,9 +280,7 @@ async def get_answer_as_stream(
         similarity_cutoff=query_settings.similarity_cutoff,
         filters=severity_filters,
     )
-        
-
-        
+         
     response_related_queries_synthesizer = get_response_synthesizer(
         response_mode= "tree_summarize",
         summary_template= text_rq_template, 
@@ -334,6 +334,7 @@ async def get_answer_as_stream(
         "subqueries": [],
         "completed_subqueries":[],
         "final_answer": "",
+        "final_short_answer": "",
         "input_tokens": 0,
         "output_tokens": 0,
         "refined_query": "",
@@ -348,7 +349,23 @@ async def get_answer_as_stream(
     # ✅ This is  an **async generator**
     async for chunk in answer_workflow.astream(init_state, stream_mode="custom"):
         yield chunk
+  except CustomError:
+      # Forventede feil – la route håndtere HTTP-respons
+      logging.warning("CustomError raised in get_answer_as_stream", exc_info=True)
+      raise
 
+  except asyncio.CancelledError:
+      # Viktig: må ikke svelges i async streaming
+      logging.info("Streaming cancelled by client")
+      raise
+
+  except Exception as e:
+      # Uventede feil
+      logging.exception("Unhandled error in get_answer_as_stream")
+      raise CustomError(
+          "En intern feil oppstod under behandling av forespørselen.",
+          500
+      )
 # --------------------------------------------------------------------------------------------------------------
 
 async def get_related_qa_as_stream(
@@ -356,6 +373,7 @@ async def get_related_qa_as_stream(
     server_settings: ServerSettings,
     vector_store: VectorIndexStore
 ):
+  try:
     # 1) Load the text_bank corresponding to the index
     vec_name = query_settings.vectorIndex
     entry = vector_store.get(vec_name)
@@ -423,12 +441,30 @@ async def get_related_qa_as_stream(
         "main_category": "",
         "query_severity": Literal["Green", "Yellow", "Red", ""],
         "references": [],
-        "final_answer": ""  
+        "final_answer": "",
+        "final_short_answer": ""
     }
 
 
 
     # ✅ This is  an **async generator**
     async for chunk in related_qa_workflow.astream(init_state, stream_mode="custom"):
-        yield chunk
+      yield chunk
+        
+  except CustomError:
+    # Forventede feil – la route håndtere HTTP-respons
+    logging.warning("CustomError raised in get_answer_as_stream", exc_info=True)
+    raise
 
+  except asyncio.CancelledError:
+    # Viktig: må ikke svelges i async streaming
+    logging.info("Streaming cancelled by client")
+    raise
+
+  except Exception as e:
+    # Uventede feil
+    logging.exception("Unhandled error in get_answer_as_stream")
+    raise CustomError(
+        "En intern feil oppstod under behandling av forespørselen.",
+        500
+    )

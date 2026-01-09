@@ -355,6 +355,7 @@ Du er en hjelpsom rådgiver og skal svare på norsk (bokmål).
 Du skal returnere:
 - "answer": et samlet svar på spørsmålet.
 - "claims": en liste med påstander med tilhørende citations.
+- "short_answer": en kost oppsummering av "answer"
 
 
 ========================================
