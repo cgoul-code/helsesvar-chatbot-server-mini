@@ -681,17 +681,16 @@ def fast_single(state: State_Answer) -> Dict[str, Any]:
 
     in_tokens = result.get("input_tokens", 0) or 0
     out_tokens = result.get("output_tokens", 0) or 0
+    
+    final_answer = "Jeg har dessverre ikke informasjon om dette i kildene jeg har tilgang til."
+    final_short_answer = "Jeg har dessverre ikke informasjon om dette i kildene jeg har tilgang til."
+    refs = []
 
     # ---------- HER BRUKER VI CLAIMS-VALIDERINGA ----------
     if completed.response_validity == "valid":
-        final_answer = completed.answer
-        final_short_answer = completed.short_answer
-        refs = _dedupe_references(completed.references, top_k=5)
-    else:
-        final_answer = (
-            "Jeg har dessverre ikke informasjon om dette i kildene jeg har tilgang til."
-        )
-        refs = []
+        final_answer = completed.answer or final_answer
+        final_short_answer = completed.short_answer or ""
+        refs = _dedupe_references(completed.references or [], top_k=5)
     # ------------------------------------------------------
 
     # Oppdater state-feltene som brukes senere
