@@ -33,7 +33,7 @@ from langchain_openai import AzureChatOpenAI
 
 # --- Import your project utilities (these must exist in your environment) ---
 from config import server_settings
-from answer_utils import get_answer_with_related_queries_as_stream
+from answer_utils import get_answer_as_stream
 from query_utils import QuerySettings
 from config import ServerSettings, VectorIndexStore
 
@@ -67,10 +67,11 @@ server_settings = ServerSettings()
 LLMGPT4 = AzureChatOpenAI(
     azure_deployment=os.getenv('AZURE_OPENAI_DEPLOYMENT_NAME'),
     api_version=os.getenv('AZURE_OPENAI_API_VERSION'),
+    api_key=os.getenv('AZURE_OPENAI_API_KEY'),
     azure_endpoint=os.getenv('AZURE_OPENAI_ENDPOINT'),
     timeout=120,
-    reasoning_effort="minimal",
-    verbose=True
+    temperature = 0.0, 
+    verbose=True,
 )
 server_settings.set_llm(LLMGPT4)
 
@@ -153,7 +154,7 @@ async def _run_one_question(
     maincategory_text: Optional[str] = None
     subcategories_text: Optional[str] = None
 
-    async for chunk in get_answer_with_related_queries_as_stream(qs, server_settings, vector_store):
+    async for chunk in get_answer_as_stream(qs, server_settings, vector_store):
         # Each chunk is expected to be a dict like {"event": "...", "structured_answer_delta": "..."}
         try:
             event = chunk.get("event")
@@ -167,11 +168,11 @@ async def _run_one_question(
                 text_delta = chunk[k]
                 break
 
-        if event == "Answer" and text_delta:
+        if event == "answer" and text_delta:
             answer_buffer.append(text_delta)
-        elif event == "Related queries" and text_delta:
+        elif event == "related queries" and text_delta:
             related_queries_json = text_delta  # raw JSON array string
-        elif event == "Refined query" and text_delta:
+        elif event == "refined query" and text_delta:
             refined_query_text = text_delta
         elif event == "Maincategory" and text_delta:
             maincategory_text = text_delta
