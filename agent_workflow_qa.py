@@ -220,9 +220,9 @@ def emit_query_answer_references(state: State_Related) -> Dict[str, Any]:
             icon_url = r.get("icon_url")
 
             if icon_url:
-                bullet = f'- [{name}]({url}) ![]({icon_url})\n'
+                bullet = f'[{name}]({url}) ||IMG|| {icon_url}\n'
             else:
-                bullet = f'- [{name}]({url})\n'
+                bullet = f'[{name}]({url})\n'
             _emit(bullet, event="references")
    
 
