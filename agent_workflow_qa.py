@@ -466,7 +466,7 @@ def related_queries_dialog_from_query(state: State_Related) -> dict:
         "Du hjelper ungdom i Norge. Du får samtalehistorikk, siste brukerspørsmål, "
         "og en liste med kandidatspørsmål fra en spørsmålsbank.\n\n"
         "Oppgave:\n"
-        "- Velg MAKS 3 kandidatspørsmål som er en NATURLIG fortsettelse i dialogen.\n"
+        "- Velg MAKS 2 kandidatspørsmål som er en NATURLIG fortsettelse i dialogen.\n"
         "- Ikke velg kandidater som bare gjentar siste spørsmål.\n"
         "- Velg kandidater som flytter dialogen videre (avklaring, neste steg, risiko, når søke hjelp).\n"
         "- IKKE endre teksten i kandidatene. Du skal bare returnere node_id.\n"
@@ -478,7 +478,7 @@ def related_queries_dialog_from_query(state: State_Related) -> dict:
 
     selection: RelatedSelection = llm.with_structured_output(RelatedSelection).invoke(prompt)
 
-    selected_ids = selection.selected_node_ids[:3] if selection.selected_node_ids else []
+    selected_ids = selection.selected_node_ids[:2] if selection.selected_node_ids else []
     selected_map = {c["node_id"]: c for c in uniq}
 
     picked = [selected_map[i] for i in selected_ids if i in selected_map]

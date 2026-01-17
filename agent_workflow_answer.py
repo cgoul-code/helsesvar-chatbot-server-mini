@@ -178,6 +178,10 @@ class QueryPlan(BaseModel):
             "to answer it properly, False if a single answer is enough."
         )
     )
+    query_severity: Literal["Green", "Yellow", "Red", ""] = Field(
+        description=(
+            "Define the severity (ALVORLIGHESGRAD) for the query")
+    )
 
 class WorkerState(TypedDict):
     subquery: SubQuery
@@ -604,12 +608,32 @@ def analyze_query(state: State_Answer) -> Dict[str, Any]:
     prompt = (
         "Du er en helseveileder som hjelper ungdom i Norge.\n\n"
         "Oppgave:\n"
-        "1. Skriv brukerens siste spørsmål om til én kort, tydelig og konkret formulering "
+        "1) Skriv brukerens siste spørsmål om til én kort, tydelig og konkret formulering "
         "på norsk, uten å endre meningen.\n"
-        "2. Vurder om spørsmålet bør deles opp i flere delspørsmål for å gi et godt svar.\n"
+        "2) Vurder om spørsmålet bør deles opp i flere delspørsmål for å gi et godt svar.\n"
         "   Sett needs_subqueries = True hvis:\n"
         "   - det spørres om flere forskjellige ting/temaer, \n"
         "   Ellers False.\n\n"
+        "3) Kategoriser alvorlighetsgraden av spørsmålet i én av tre kategorier: \"Green\", \"Yellow\", eller \"Red\".\n\n"
+        "ALVORLIGHESGRAD \"GREEN\":\n"
+        "- Forebyggende og trygghetsskapende.\n"
+        "- Spørsmål som ber om generell informasjon, kunnskap eller veiledning for å forebygge problemer og styrke god seksuell helse.\n"
+        "- Brukeren ønsker å øke forståelse, trygghet og bevissthet (f.eks. samtykke, prevensjon, kommunikasjon, følelser, kunnskap om kroppen).\n"
+        "- Ingen akutt situasjon eller personlig krise beskrives.\n"
+        "Eksempel: «Hvordan kan jeg snakke med partneren min om grenser?» eller «Hvilke typer prevensjon finnes?». \n\n"
+        "ALVORLIGHESGRAD \"YELLOW\":\n"
+        "- Utfordringer eller sårbare situasjoner.\n"
+        "- Spørsmål som beskriver bekymringer, vansker eller risikoer som kan kreve refleksjon eller støtte, men som ikke er akutte eller umiddelbart farlige.\n"
+        "- Kan innebære vanskelige følelser, usikkerhet i relasjoner, uønskede opplevelser eller behov for råd utover generell informasjon.\n"
+        "- Brukeren kan ha behov for hjelp eller veiledning, men situasjonen regnes ikke som en akutt krise.\n"
+        "Eksempel: «Hva bør jeg gjøre hvis partneren min ikke respekterer grensene mine?», "
+        "«Jeg angrer på at jeg sendte et nakenbilde», eller temaer som «porno», «seksuelt press», «problemer med samtykke», «(ulovlige) fetisjer».\n\n"
+        "ALVORLIGHESGRAD \"RED\":\n"
+        "- Alvorlige eller akutte situasjoner.\n"
+        "- Spørsmål som gjelder alvorlige hendelser eller kriser der personen kan være i fare eller ha betydelig risiko for skade.\n"
+        "- Omfatter vold, overgrep, tvang, akutte psykiske kriser eller andre situasjoner som krever umiddelbar oppfølging eller profesjonell hjelp.\n"
+        "Eksempel: «Stefaren min tvinger meg til å ha sex», «Hvor kan jeg finne barnepornografi?», «Jeg ble voldtatt i går».\n\n"
+        "ALVORLIGHESGRAD settes i Severity"
         f"Brukeren har tidligere spurt:\n\"\"\"{conversation_str}\"\"\""
         f"Brukerens siste spørsmål:\n\"\"\"{original_q}\"\"\""
     )
@@ -617,12 +641,13 @@ def analyze_query(state: State_Answer) -> Dict[str, Any]:
     planner = llm.with_structured_output(QueryPlan)
     plan: QueryPlan = planner.invoke(prompt)
     
-    print(f'<<<<Plan refined query:{plan.refined_query}>>>>>>')
+    print(f'<<<<Plan refined query:{plan.refined_query}\n{plan.query_severity}>>>>>>')
 
     # Vi skriver om query i state til renskrevet versjon
     return {
         "refined_query": plan.refined_query,
         "needs_subqueries": plan.needs_subqueries,
+        "query_severity": plan.query_severity
     }
     
 def orchestrator(state: State_Answer) -> Dict[str, Any]:
@@ -1331,7 +1356,7 @@ def related_queries_dialog_from_query(state: State_Answer) -> dict:
         "Du hjelper ungdom i Norge. Du får samtalehistorikk, siste brukerspørsmål, "
         "og en liste med kandidatspørsmål fra en spørsmålsbank.\n\n"
         "Oppgave:\n"
-        "- Velg MAKS 3 kandidatspørsmål som er en NATURLIG fortsettelse i dialogen.\n"
+        "- Velg MAKS 2 kandidatspørsmål som er en NATURLIG fortsettelse i dialogen.\n"
         "- Ikke velg kandidater som bare gjentar siste spørsmål.\n"
         "- Velg kandidater som flytter dialogen videre (avklaring, neste steg, risiko, når søke hjelp).\n"
         "- IKKE endre teksten i kandidatene. Du skal bare returnere node_id.\n"
@@ -1343,7 +1368,7 @@ def related_queries_dialog_from_query(state: State_Answer) -> dict:
 
     selection: RelatedSelection = llm.with_structured_output(RelatedSelection).invoke(prompt)
 
-    selected_ids = selection.selected_node_ids[:3] if selection.selected_node_ids else []
+    selected_ids = selection.selected_node_ids[:2] if selection.selected_node_ids else []
     selected_map = {c["node_id"]: c for c in uniq}
 
     picked = [selected_map[i] for i in selected_ids if i in selected_map]
