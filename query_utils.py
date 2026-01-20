@@ -19,6 +19,7 @@ class QuerySettings:
         self.query = kwargs.get('query', "")  
         self.from_related_q = kwargs.get('from_related_q', False)  
         self.from_node_id = kwargs.get('from_node_id', "")
+        self.requested_categories = kwargs.get('requested_categories', [])  
         
         self.session_id = kwargs.get('session_id', None)
         self.messages = kwargs.get('messages', [])
@@ -42,6 +43,7 @@ def get_query_settings(json_request):
         query = json_request.get('query', ""),
         from_related_q = json_request.get('from_related_q', False),
         from_node_id = json_request.get('from_node_id', ""),
+        requested_categories = json_request.get('requested_categories', []),
 
         session_id=json_request.get('session_id'),
         messages=json_request.get('messages', []),

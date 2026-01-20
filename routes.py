@@ -5,14 +5,13 @@ from config import server_settings, vector_store
 import secrets
 from query_utils import get_query_settings
 from answer_utils import (
-    get_answer_as_stream, get_related_qa_as_stream
+    get_answer_as_stream, get_related_qa_as_stream, get_examples_full_as_stream
 )
 
-# Agents must be async generators that yield small dict/str chunks
 AGENT_REGISTRY = {
     "hvaerinnafor": get_answer_as_stream,
     "hvaerinnafor_related_qa": get_related_qa_as_stream,
-#    "structured": get_answer_structured_as_stream,
+    "hvaerinnafor_examples": get_examples_full_as_stream, 
 }
 
 SESSION_STORE: dict[str, list[dict]] = {}
@@ -100,6 +99,58 @@ def register_routes(app):
                 history.append(msg)
         SESSION_STORE[session_id] = history
         return history
+    
+    @app.route("/examples", methods=["POST", "OPTIONS"])
+    async def examples():
+        if request.method == "OPTIONS":
+            return _cors_preflight()
+
+        try:
+            payload = await request.get_json()
+            logging.info("Received /examples payload: %r", payload)
+
+            query_settings = get_query_settings(payload)
+
+            agent_name = getattr(query_settings, "agent", None) or "hvaerinnafor_examples"
+            agent_fn = AGENT_REGISTRY.get(agent_name)
+            if agent_fn is None:
+                return {"error": f"Unknown agent '{agent_name}'"}, 400
+
+            async def stream_examples():
+                yield _format_sse(json.dumps({"event": "open", "message": "ok"}, ensure_ascii=False))
+                print("Starting examples stream...")
+
+                try:
+                    print("Query settings for examples:", query_settings)
+                    async for chunk in agent_fn(query_settings, server_settings, vector_store):
+                        data = json.dumps(chunk, ensure_ascii=False) if isinstance(chunk, dict) else str(chunk)
+                        yield _format_sse(data)
+                        await asyncio.sleep(0)
+
+                except (asyncio.CancelledError, GeneratorExit):
+                    return
+                except Exception as e:
+                    logging.error("Error while streaming examples output", exc_info=True)
+                    yield _format_sse(json.dumps({"event": "error", "error": str(e)}, ensure_ascii=False))
+                finally:
+                    # make sure done always comes
+                    yield _format_sse(json.dumps({"event": "done"}, ensure_ascii=False))
+
+            headers = {
+                "Content-Type": "text/event-stream; charset=utf-8",
+                "Cache-Control": "no-cache",
+                "Connection": "keep-alive",
+                "X-Accel-Buffering": "no",
+                "Access-Control-Allow-Origin": "*",
+            }
+            return Response(stream_examples(), headers=headers)
+
+        except Exception as e:
+            logging.error("Error in /examples handler", exc_info=True)
+            status_code = getattr(e, "code", 500)
+            return {"error": str(e)}, status_code
+
+    
 
     @app.route("/chat", methods=["POST", "OPTIONS"])
     async def chat():
