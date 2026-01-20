@@ -9,6 +9,12 @@ from llama_index.core import ChatPromptTemplate, get_response_synthesizer, Vecto
 from typing import Literal
 import logging
 import asyncio
+import re
+import random
+from typing import Any, Dict, List, Optional
+from llama_index.core.schema import NodeWithScore
+from llama_index.core.postprocessor import SimilarityPostprocessor
+
 
 categories = [
   {
@@ -117,7 +123,6 @@ categories = [
     ]
   }
 ]
-
 async def get_answer_as_stream(
     query_settings: QuerySettings,
     server_settings: ServerSettings,
@@ -468,3 +473,178 @@ async def get_related_qa_as_stream(
         "En intern feil oppstod under behandling av forespørselen.",
         500
     )
+
+# --------------------------------------------------------------------------------------------------------------
+def _category_title_to_id(title: str) -> str:
+    s = (title or "").strip().lower()
+    s = re.sub(r"\s+", "-", s)
+    # keep norwegian letters too
+    s = re.sub(r"[^a-z0-9\-æøå]", "", s)
+    return s or "category"
+
+def _node_to_query_and_id(nws: Any) -> Optional[Dict[str, Any]]:
+    """
+    Convert a LlamaIndex NodeWithScore (or similar) to {query, node_id}.
+    Tries metadata first (question/query/title), then falls back to node text.
+    """
+    try:
+        node = nws.node if hasattr(nws, "node") else nws
+        meta = getattr(node, "metadata", None) or {}
+
+        q = (
+            meta.get("question")
+            or meta.get("query")
+            or meta.get("title")
+            or meta.get("q")
+            or None
+        )
+
+        if not q:
+            if hasattr(node, "get_content"):
+                q = node.get_content(metadata_mode="none")
+            elif hasattr(node, "get_text"):
+                q = node.get_text()
+            else:
+                q = str(node)
+
+        q = (q or "").strip()
+        if not q:
+            return None
+
+        node_id = getattr(node, "node_id", None) or meta.get("node_id")
+        return {"query": q, "node_id": node_id}
+    except Exception:
+        return None
+
+def _pick_unique_random(items: List[Dict[str, Any]], k: int) -> List[Dict[str, Any]]:
+    if not items:
+        return []
+    # dedupe by query (case-insensitive)
+    seen = set()
+    deduped = []
+    for it in items:
+        q = (it.get("query") or "").strip().lower()
+        if not q or q in seen:
+            continue
+        seen.add(q)
+        deduped.append(it)
+
+    if len(deduped) <= k:
+        random.shuffle(deduped)
+        return deduped
+    return random.sample(deduped, k)
+
+async def _discover_categories_from_qabank(
+    index_qa_bank: VectorStoreIndex,
+    max_probe: int = 250,
+    keys: tuple = ("category", "main_category"),
+) -> List[str]:
+    """
+    Best-effort discovery: fetch a bunch of nodes and collect unique metadata.category values.
+    If your bank always has metadata.category (like your example), this works well.
+    """
+    cats = set()
+    try:
+        retriever = index_qa_bank.as_retriever(similarity_top_k=max_probe, similarity_cutoff=0.0)
+        nodes = await retriever.aretrieve("kategorier")  # generic probe query
+        for nws in nodes or []:
+            node = nws.node
+            meta = getattr(node, "metadata", None) or {}
+            for k in keys:
+                v = meta.get(k)
+                if isinstance(v, str) and v.strip():
+                    cats.add(v.strip())
+    except Exception:
+        return []
+    return sorted(cats)
+
+# ------------------------------
+# NEW AGENT: /examples (one response, full list)
+# ------------------------------
+
+async def get_examples_full_as_stream(
+    query_settings: QuerySettings,
+    server_settings: ServerSettings,
+    vector_store: VectorIndexStore,
+):
+    """
+    SSE stream:
+      {"event":"examples_categories","items":[
+          { "id": "...", "title": "...", "items": [ {query,node_id}, {query,node_id}, {query,node_id} ] }
+      ]}
+      {"event":"done"}
+
+    - ONE request returns categories + items (3 random per category)
+    - Uses QA-bank metadata.category == category
+    - Does NOT use the global `categories` variable
+    """
+    logging.info("------------->>get_examples_full_as_stream")
+
+    try:
+        # Load QA-bank index
+        vec_name_qa_bank = f"{query_settings.vectorIndex}_qa_bank"
+        entry_qa_bank = vector_store.get(vec_name_qa_bank)
+        if entry_qa_bank is None:
+            logging.error("Index not found: %s", vec_name_qa_bank)
+            raise CustomError(
+                f"Index not found, referansefilene for {vec_name_qa_bank} mangler!",
+                404
+            )
+
+        index_qa_bank: VectorStoreIndex = entry_qa_bank.index
+
+        # Decide which categories to include (NO global categories variable)
+        requested = getattr(query_settings, "requested_categories", None)
+        if isinstance(requested, list) and requested:
+            categories_to_use = [str(x).strip() for x in requested if str(x).strip()]
+        else:
+            categories_to_use = await _discover_categories_from_qabank(index_qa_bank)
+
+        if not categories_to_use:
+            yield {"event": "examples_categories", "items": []}
+            yield {"event": "done"}
+            return
+
+        out: List[Dict[str, Any]] = []
+
+        # For each category, retrieve a pool with metadata filter, then random-sample 3
+        for cat_title in categories_to_use:
+            cat_title = (cat_title or "").strip()
+            if not cat_title:
+                continue
+
+            try:
+                filters = MetadataFilters(filters=[MetadataFilter(key="category", value=cat_title)])
+                retriever = index_qa_bank.as_retriever(
+                    similarity_top_k=80,   # pool size; bigger => better random variety
+                    similarity_cutoff=0.0,
+                    filters=filters,
+                )
+                results = await retriever.aretrieve(cat_title)
+            except Exception:
+                results = []
+
+            mapped: List[Dict[str, Any]] = []
+            for nws in results or []:
+                item = _node_to_query_and_id(nws)
+                if item:
+                    mapped.append(item)
+
+            picked = _pick_unique_random(mapped, 3)
+
+            out.append({
+                "id": _category_title_to_id(cat_title),
+                "title": cat_title,
+                "items": picked,  # [{query,node_id} x3]
+            })
+
+        yield {"event": "examples_categories", "items": out}
+        yield {"event": "done"}
+
+    except CustomError:
+        raise
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        logging.exception("Unhandled error in get_examples_full_as_stream")
+        raise CustomError("En intern feil oppstod under behandling av forespørselen.", 500)
