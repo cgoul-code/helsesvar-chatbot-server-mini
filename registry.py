@@ -15,9 +15,26 @@ class Prompt:
             missing = str(e).strip("'")
             raise KeyError(f"Missing variable '{missing}' for prompt '{self.id}'") from None
         
-    
 
 
+
+# === VARIABLES ===
+
+CANNOT_ANSWER_PLACEHOLDER = [{"answer": "Kan du spørre på en annen måte? Jeg er usikker på hvordan det passer inn", "severity": [{"Green", "Yellow"}]},
+                            {"answer": "Her er det en mangel i min kunnskap. Jeg kan kanskje svare på dette hvis du spør på en annen måte.", "severity": [{"Green", "Yellow"}]},
+                            {"answer": "Oops! Du fant noe jeg ikke kan svare på. Spør på en annen måte eller spør om noe annet.", "severity": [{"Green", "Yellow"}]},
+                            {"answer": "Jeg er ikke noe god på «small talk». Jeg er veldig god til å svare på spørsmål :-D", "severity": [{"Green", "Yellow"}]},
+                            {"answer": "Jeg er ikke sikker på hvordan jeg skal svare på det. Kan du spørre på en annen måte?", "severity": [{"Green", "Yellow"}]},
+                            {"answer": "Det var et vanskelig spørsmål! Kan du prøve å spørre på en annen måte?", "severity": [{"Green", "Yellow"}]},
+                            {"answer": "Jeg er ikke sikker på hvordan jeg skal hjelpe med det. Kan du spørre på en annen måte?", "severity": [{"Green", "Yellow"}]},
+                            {"answer": "Dette er vanskelig å svare på. Snakk om dette med en voksen du stoler på. Du kan også chatte her med kvalifisert helsepersonell hos [Sex og samfunn](https://sexogsamfunn.no/).", "severity": [{"Red"}]}
+                            ]
+                            
+
+
+
+
+# === PROMPTS ===
 VECTORINDEX_SUMMARY = Prompt(
     id= "vectorindex_summary",
     template=(

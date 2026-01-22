@@ -5,10 +5,12 @@ import re
 import textwrap
 import unicodedata
 import heapq
+import random
 
 
 from operator import add
 from typing import Any, Dict, List, Literal, Optional, Tuple, Annotated
+
 
 from typing_extensions import TypedDict
 from pydantic import BaseModel, Field
@@ -29,7 +31,7 @@ from langchain_core.callbacks import UsageMetadataCallbackHandler
 
 from rapidfuzz.fuzz import partial_ratio
 
-from registry import subqueries_prompt, GROUNDED_PROMPT
+from registry import subqueries_prompt, GROUNDED_PROMPT, CANNOT_ANSWER_PLACEHOLDER
 
 from agent_shared import Reference, _emit, _node_text, _build_related_queries_retriever, _as_int, _as_float, _dedupe_references, _normalize
 
@@ -197,6 +199,22 @@ _POSSIBLE_META_IDS = ("doc_id", "from_doc_id", "document_id", "source_id")
 # ---------------------------------------------------------
 # Små hjelpefunksjoner
 # ---------------------------------------------------------
+
+def _pick_cannot_answer_placeholder(query_severity: str) -> str:
+    sev = (query_severity or "").strip()  # "Green" | "Yellow" | "Red" | ""
+    if not sev:
+        sev = "Green"  # sensible default
+
+    eligible = [
+        x for x in CANNOT_ANSWER_PLACEHOLDER
+        if sev in (x.get("severity") or [])
+    ]
+
+    # Fallback if list is misconfigured or severity missing
+    if not eligible:
+        eligible = CANNOT_ANSWER_PLACEHOLDER
+
+    return random.choice(eligible)["answer"]
 
 def _make_dialog_plan(llm, history_txt: str) -> DialogPlan:
     prompt = (
@@ -707,8 +725,10 @@ def fast_single(state: State_Answer) -> Dict[str, Any]:
     in_tokens = result.get("input_tokens", 0) or 0
     out_tokens = result.get("output_tokens", 0) or 0
     
-    final_answer = "Jeg har dessverre ikke informasjon om dette i kildene jeg har tilgang til."
-    final_short_answer = "Jeg har dessverre ikke informasjon om dette i kildene jeg har tilgang til."
+    placeholder = _pick_cannot_answer_placeholder(state.get("query_severity", "Green"))
+    final_answer = placeholder
+    final_short_answer = placeholder
+    
     refs = []
 
     # ---------- HER BRUKER VI CLAIMS-VALIDERINGA ----------
@@ -1004,10 +1024,10 @@ def synthesizer(state: State_Answer) -> Dict[str, Any]:
             }
 
         # Ingen gyldige del-svar
+        placeholder = _pick_cannot_answer_placeholder(state.get("query_severity", "Green"))
         return {
-            "final_answer": (
-                "Jeg har dessverre ikke informasjon om dette i kildene jeg har tilgang til."
-            ),
+            "final_answer": placeholder,
+            "final_short_answer": placeholder, 
             "references": [],
         }
 
