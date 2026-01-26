@@ -1,3 +1,4 @@
+from llama_index_client import FilterOperator
 from agent_workflow_answer import (answer_workflow, State_Answer)
 from agent_workflow_qa import (related_qa_workflow, State_Related)
 from config import ServerSettings, VectorIndexStore, CustomError
@@ -11,7 +12,7 @@ import logging
 import asyncio
 import re
 import random
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 from llama_index.core.schema import NodeWithScore
 from llama_index.core.postprocessor import SimilarityPostprocessor
 
@@ -534,29 +535,73 @@ def _pick_unique_random(items: List[Dict[str, Any]], k: int) -> List[Dict[str, A
         return deduped
     return random.sample(deduped, k)
 
-async def _discover_categories_from_qabank(
-    index_qa_bank: VectorStoreIndex,
-    max_probe: int = 250,
-    keys: tuple = ("category", "main_category"),
-) -> List[str]:
+def _split_joined_category(value: str) -> List[str]:
     """
-    Best-effort discovery: fetch a bunch of nodes and collect unique metadata.category values.
-    If your bank always has metadata.category (like your example), this works well.
+    Supports:
+      "A"     -> ["A"]
+      "A|B"   -> ["A", "B"]
+      "|A|B|" -> ["A", "B"]
     """
-    cats = set()
-    try:
-        retriever = index_qa_bank.as_retriever(similarity_top_k=max_probe, similarity_cutoff=0.0)
-        nodes = await retriever.aretrieve("kategorier")  # generic probe query
-        for nws in nodes or []:
-            node = nws.node
-            meta = getattr(node, "metadata", None) or {}
-            for k in keys:
-                v = meta.get(k)
-                if isinstance(v, str) and v.strip():
-                    cats.add(v.strip())
-    except Exception:
+    if not isinstance(value, str):
         return []
+    s = value.strip()
+    if not s:
+        return []
+    return [p.strip() for p in s.split("|") if p.strip()]
+async def _discover_categories_from_qabank(index_qa_bank: VectorStoreIndex) -> List[str]:
+    cats = set()
+
+    sc = getattr(index_qa_bank, "storage_context", None)
+    ds = getattr(sc, "docstore", None) if sc else None
+    docs_dict = getattr(ds, "docs", None) if ds else None
+
+    if not isinstance(docs_dict, dict):
+        return []
+
+    for doc in docs_dict.values():
+        meta = getattr(doc, "metadata", None) or {}
+
+        raw_list = meta.get("categories")
+        if isinstance(raw_list, list):
+            for x in raw_list:
+                s = str(x).strip()
+                if s:
+                    cats.add(s)
+
+        raw = meta.get("category")
+        if isinstance(raw, str) and raw.strip():
+            for part in [p.strip() for p in raw.split("|") if p.strip()]:
+                cats.add(part)
+
+        raw2 = meta.get("main_category")
+        if isinstance(raw2, str) and raw2.strip():
+            cats.add(raw2.strip())
+
     return sorted(cats)
+
+
+def _meta_has_category(meta: dict, cat_title: str) -> bool:
+    cat_title = (cat_title or "").strip()
+    if not cat_title:
+        return False
+
+    # Preferred list field
+    raw_list = meta.get("categories")
+    if isinstance(raw_list, list):
+        return any((str(x).strip() == cat_title) for x in raw_list)
+
+    # Fallback string field (supports "A", "A|B", "|A|B|")
+    raw = meta.get("category")
+    if isinstance(raw, str) and raw.strip():
+        parts = [p.strip() for p in raw.split("|") if p.strip()]
+        return cat_title in parts
+
+    # Optional extra keys (if you sometimes use main_category)
+    raw2 = meta.get("main_category")
+    if isinstance(raw2, str) and raw2.strip():
+        return raw2.strip() == cat_title
+
+    return False
 
 # ------------------------------
 # NEW AGENT: /examples (one response, full list)
@@ -614,13 +659,24 @@ async def get_examples_full_as_stream(
                 continue
 
             try:
-                filters = MetadataFilters(filters=[MetadataFilter(key="category", value=cat_title)])
                 retriever = index_qa_bank.as_retriever(
-                    similarity_top_k=80,   # pool size; bigger => better random variety
+                    similarity_top_k=200,   # bigger pool since we filter afterwards
                     similarity_cutoff=0.0,
-                    filters=filters,
                 )
+
                 results = await retriever.aretrieve(cat_title)
+
+                mapped: List[Dict[str, Any]] = []
+                for nws in results or []:
+                    node = nws.node
+                    meta = getattr(node, "metadata", None) or {}
+
+                    if not _meta_has_category(meta, cat_title):
+                        continue
+
+                    item = _node_to_query_and_id(nws)
+                    if item:
+                        mapped.append(item)
             except Exception:
                 results = []
 
