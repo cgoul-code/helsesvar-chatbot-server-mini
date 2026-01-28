@@ -115,6 +115,7 @@ def _fetch_answer_from_related_question(
     meta = getattr(qa_node, "metadata", {}) or {}
     answer = meta.get("answer", "")
     short_answer = meta.get("short_answer","")
+    logging.info(f"_fetch_answer_from_related_question- Retrieved answer length: {len(answer)} chars; short answer length: {len(short_answer)} chars")
     from_doc_id = meta.get("from_doc_id", "")
     
     if not answer:
@@ -200,7 +201,7 @@ def emit_query_answer_references(state: State_Related) -> Dict[str, Any]:
 
     answer = state.get("final_answer", "")
     short_answer = state.get("final_short_answer", "")
-
+    logging.info(f"emit_query_answer_references- Final answer length: {len(answer)} chars; short answer length: {len(short_answer)} chars")
     for line in answer.splitlines(True):
         _emit(line, event = "answer")
     _emit("\n", event = "answer")
