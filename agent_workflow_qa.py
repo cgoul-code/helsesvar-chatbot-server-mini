@@ -476,8 +476,11 @@ def related_queries_dialog_from_query(state: State_Related) -> dict:
         f"Siste spørsmål:\n{last_q}\n\n"
         f"Kandidatspørsmål (JSONL):\n{candidates_jsonl}\n"
     )
-
+    logging.info(f"--------------------------------\nrelated_queries_dialog_from_query- Invoking LLM for selection...")
+    logging.info(f"related_queries_dialog_from_query- Prompt: {prompt} ")
+    logging.info(f"--------------------------------\nrelated_queries_dialog_from_query- Invoking LLM for selection...")
     selection: RelatedSelection = llm.with_structured_output(RelatedSelection).invoke(prompt)
+    logging.info(f"related_queries_dialog_from_query- LLM selection: {selection}")
 
     selected_ids = selection.selected_node_ids[:2] if selection.selected_node_ids else []
     selected_map = {c["node_id"]: c for c in uniq}
