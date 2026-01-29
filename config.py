@@ -143,7 +143,7 @@ LLMGPT4 = AzureChatOpenAI(
     azure_endpoint=os.getenv('AZURE_OPENAI_ENDPOINT'),
     timeout=120,
     temperature = 0.0, 
-    verbose=True,
+    verbose=False,
 )
 
 server_settings.set_llm(LLMGPT4)
@@ -157,6 +157,13 @@ def init_env_and_logging():
         force=True
     )
 
+    # Silence noisy HTTP request logs from the OpenAI/Azure stack
+    logging.getLogger("httpx").setLevel(logging.WARNING)
+    logging.getLogger("httpcore").setLevel(logging.WARNING)
+
+    # Sometimes these also produce noise depending on versions
+    logging.getLogger("openai").setLevel(logging.WARNING)
+    logging.getLogger("azure").setLevel(logging.WARNING)
 
 async def async_read_indexes():
     logging.info("Starting to read indexes...")

@@ -161,7 +161,6 @@ async def get_answer_as_stream(
     # else:
     #     full_query = last_question
   
-    print('------------->>get_answer')
     # 1) Try to load the requested index
     vec_name = query_settings.vectorIndex
     entry = vector_store.get(vec_name)
@@ -310,8 +309,6 @@ async def get_answer_as_stream(
 
     # 5) Initialize and run your optimizer workflow
     
-    print(f'q: {last_question}')
-    print(f'hist:{conversation_str}')
     init_state: State_Answer = {
         "llm": server_settings.llm,
         "index" : index,
@@ -423,6 +420,7 @@ async def get_related_qa_as_stream(
             convo_lines.append(f"{role}: {content}")
 
     conversation_str = "\n".join(convo_lines)
+    logging.info(f'<conversation_str: {conversation_str}>')
 
     # Extract last user question (already done in QuerySettings)
     last_question = query_settings.user_content or query_settings.query
@@ -585,21 +583,15 @@ def _meta_has_category(meta: dict, cat_title: str) -> bool:
     if not cat_title:
         return False
 
-    # Preferred list field
-    raw_list = meta.get("categories")
-    if isinstance(raw_list, list):
-        return any((str(x).strip() == cat_title) for x in raw_list)
+    # categories: list of up to 3 categories
+    cats = meta.get("categories")
+    if isinstance(cats, list) and any(str(x).strip() == cat_title for x in cats):
+        return True
 
-    # Fallback string field (supports "A", "A|B", "|A|B|")
-    raw = meta.get("category")
-    if isinstance(raw, str) and raw.strip():
-        parts = [p.strip() for p in raw.split("|") if p.strip()]
-        return cat_title in parts
-
-    # Optional extra keys (if you sometimes use main_category)
-    raw2 = meta.get("main_category")
-    if isinstance(raw2, str) and raw2.strip():
-        return raw2.strip() == cat_title
+    # category: hovedkategori (single string)
+    hoved = meta.get("category")
+    if isinstance(hoved, str) and hoved.strip() == cat_title:
+        return True
 
     return False
 

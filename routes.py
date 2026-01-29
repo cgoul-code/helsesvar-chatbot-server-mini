@@ -107,8 +107,6 @@ def register_routes(app):
 
         try:
             payload = await request.get_json()
-            logging.info("Received /examples payload: %r", payload)
-
             query_settings = get_query_settings(payload)
 
             agent_name = getattr(query_settings, "agent", None) or "hvaerinnafor_examples"
@@ -118,10 +116,7 @@ def register_routes(app):
 
             async def stream_examples():
                 yield _format_sse(json.dumps({"event": "open", "message": "ok"}, ensure_ascii=False))
-                print("Starting examples stream...")
-
                 try:
-                    print("Query settings for examples:", query_settings)
                     async for chunk in agent_fn(query_settings, server_settings, vector_store):
                         data = json.dumps(chunk, ensure_ascii=False) if isinstance(chunk, dict) else str(chunk)
                         yield _format_sse(data)
@@ -167,7 +162,7 @@ def register_routes(app):
 
         try:
             payload = await request.get_json()
-            logging.info("Received /chat payload: %r", payload)
+            #logging.info("Received /chat payload: %r", payload)
 
             query_settings = get_query_settings(payload)
 

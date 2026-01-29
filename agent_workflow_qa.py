@@ -84,19 +84,6 @@ class DialogPlan(BaseModel):
 # Små hjelpefunksjoner
 # ---------------------------------------------------------
 
-def _make_dialog_plan(llm, history_txt: str) -> DialogPlan:
-    prompt = (
-        "Du får en samtalehistorikk i én tekststreng. Den inneholder flere tidligere spørsmål og svar.\n\n"
-        "Oppgaver:\n"
-        "1) Finn og skriv ut siste BRUKER-spørsmål (kort, uten ekstra tekst).\n"
-        "2) Foreslå 2-4 sannsynlige NESTE intensjoner som en naturlig fortsettelse i dialogen.\n"
-        "   Intensjoner skal være korte beskrivelser, ikke fullstendige spørsmål.\n"
-        "   Unngå å gjenta siste brukerspørsmål.\n\n"
-        f"Samtalehistorikk:\n{history_txt}\n"
-    )
-    print(f'<<<{prompt}>>>')
-    return llm.with_structured_output(DialogPlan).invoke(prompt)
-
 def _fetch_answer_from_related_question(
     node_id: str,
     index: Optional[VectorStoreIndex] = None,
@@ -208,7 +195,6 @@ def emit_query_answer_references(state: State_Related) -> Dict[str, Any]:
     
     for line in short_answer.splitlines(True):
         _emit(line, event = "short_answer")
-        print(f'###short:{line}')
     _emit("\n", event = "short_answer")
 
     top5 = state["references"]
@@ -242,7 +228,8 @@ def related_queries(state: State_Related) -> dict:
             top_k=state["similarity_top_k"],
             cutoff=state["similarity_cutoff"],
             query_severity=state.get("query_severity"),      # may be None → defaults to all
-            main_category=state.get("main_category"),        # may be None → ignored
+            #main_category=state.get("main_category"),        # may be None → ignored
+            main_category=None,        # ignore main_category for broader results
         )
 
         results = retriever.retrieve(state["query"])
@@ -302,197 +289,104 @@ def related_queries(state: State_Related) -> dict:
         
     return {}
 
-# def related_queries_dialog_from_query(state: State_Related) -> dict:
-#     _emit("Find dialog-driven related queries (query contains full history)", event="info")
-
-#     llm = state["llm"]
-    
-#     conversation_str = state.get("conversation_str")
-#     last_query = state.get("refined_query")
-      
-#     print(f'<<<history: {conversation_str}>>>')
-#     if not conversation_str:
-#         _emit("[]", event="related queries")
-#         return {"related_queries": []}
-
-#     # (valgfritt) kutt litt for kost: siste ~8000 tegn
-#     conversation_str = conversation_str[-8000:]
-
-#     # 1) Plan: last question + next intents
-#     plan = _make_dialog_plan(llm, conversation_str)
-#     last_user_q = (plan.last_user_question or "").strip()
-#     intent_texts = [i.intent for i in (plan.intents or [])][:4]
-    
-#     print(f'\n----------\n<<<plan:{plan}\nlast_user_q:{last_user_q}\nintent_texts:{intent_texts}>>>')
-
-#     # 2) Retrieve kandidater per intent
-#     retriever = _build_related_queries_retriever(
-#         index_qa_bank=state["index_related_queries"],
-#         top_k=10,
-#         cutoff=0.0,  # hent bredt, la rerank bestemme
-#         query_severity=state.get("query_severity"),
-#         main_category=state.get("main_category"),
-#     )
-
-#     candidates = {}  # node_id -> candidate
-#     for intent in intent_texts:
-#         results = retriever.retrieve(intent) or []
-#         for r in results:
-#             node = getattr(r, "node", r)
-#             meta = getattr(node, "metadata", {}) or {}
-#             node_id = getattr(node, "node_id", getattr(node, "id_", "")) or ""
-#             text = _node_text(node).strip()
-#             if not node_id or not text:
-#                 continue
-
-#             # hard-exclude: ikke foreslå nesten samme som siste brukerspørsmål
-#             if last_user_q and partial_ratio(_normalize(text), _normalize(last_user_q)) > 92:
-#                 continue
-
-#             if node_id not in candidates:
-#                 doc_id = meta.get("from_doc_id", node_id)
-#                 candidates[node_id] = {
-#                     "id": str(doc_id),
-#                     "node_id": str(node_id),
-#                     "text": text,
-#                     "severity": meta.get("severity", ""),
-#                 }
-
-#     cand_list = list(candidates.values())
-#     if not cand_list:
-#         _emit("[]", event="related queries")
-#         return {"related_queries": []}
-
-#     # 3) Rerank på “naturlig fortsettelse”
-#     cand_list = cand_list[:24]
-#     cand_block = "\n".join([f"- node_id={c['node_id']}\n  q={c['text']}" for c in cand_list])
-
-#     rerank_prompt = (
-#         "Du skal velge hvilke kandidatspørsmål fra en spørsmålsbank som er den mest NATURLIGE "
-#         "fortsettelsen i dialogen.\n\n"
-#         "Gi score 0–1 basert på:\n"
-#         "- Dialogfit: naturlig neste steg gitt historikken\n"
-#         "- Ikke repetisjon av siste brukerspørsmål\n"
-#         "- Fremdrift: avklaring/tiltak/risiko/når søke hjelp\n"
-#         "- Unngå duplikater\n\n"
-#         f"Siste brukerspørsmål: {last_user_q!r}\n\n"
-#         f"Samtalehistorikk:\n{conversation_str}\n\n"
-#         f"Kandidatspørsmål:\n{cand_block}\n"
-#     )
-
-#     reranked: RerankResult = llm.with_structured_output(RerankResult).invoke(rerank_prompt)
-#     score_map = {x.node_id: x.score for x in (reranked.ranked or [])}
-#     cand_list.sort(key=lambda c: score_map.get(c["node_id"], 0.0), reverse=True)
-
-#     # 4) Velg maks 3 med enkel diversitet
-#     picked = []
-#     used_norm = set()
-#     for c in cand_list:
-#         if len(picked) >= 3:
-#             break
-#         norm = _normalize(c["text"])
-#         if any(partial_ratio(norm, u) > 90 for u in used_norm):
-#             continue
-#         picked.append(c)
-#         used_norm.add(norm)
-
-#     related_queries = [
-#         {"keyword": p.get("severity", ""), "query": p["text"], "node_id": p["node_id"]}
-#         for p in picked
-#     ]
-
-#     _emit(json.dumps(related_queries, ensure_ascii=False), event="related queries")
-#     return {}
-
 def related_queries_dialog_from_query(state: State_Related) -> dict:
-    _emit("Related queries: single LLM selection (history-aware)", event="info")
+    logging.info(f"related_queries_dialog_from_query- Start processing...")
+    try:
+        _emit("Related queries: single LLM selection (history-aware)", event="info")
 
-    llm = state["llm"]
-    conversation_history = (state.get("conversation_history") or "").strip()
-    last_q = (state.get("refined_query") or state.get("query") or "").strip()
+        llm = state["llm"]
+        conversation_str = (state.get("conversation_str") or "").strip()
+        last_q = (state.get("refined_query") or state.get("query") or "").strip()
+        logging.info(f"related_queries_dialog_from_query- Conversation history length: {len(conversation_str)} chars")
+        logging.info(f"related_queries_dialog_from_query- Last question: {last_q}")
 
-    # 1) Hent kandidater raskt (uten intents)
-    retriever = _build_related_queries_retriever(
-        index_qa_bank=state["index_related_queries"],
-        top_k=30,          # hent litt bredt, men ikke for mye
-        cutoff=0.0,        # la LLM velge
-        query_severity=state.get("query_severity"),
-        main_category=state.get("main_category"),
-    )
+        # 1) Hent kandidater raskt (uten intents)
+        retriever = _build_related_queries_retriever(
+            index_qa_bank=state["index_related_queries"],
+            top_k=30,          # hent litt bredt, men ikke for mye
+            cutoff=0.0,        # la LLM velge
+            query_severity=state.get("query_severity"),
+            main_category=state.get("main_category"),
+        )
+        print(f"related_queries_dialog_from_query- Built retriever for related queries. {state}")
 
-    # Du kan bruke last_q for retrieval (vanligvis best). 
-    results = retriever.retrieve(last_q) or []
+        # Du kan bruke last_q for retrieval (vanligvis best). 
+        results = retriever.retrieve(last_q) or []
+        print(f"related_queries_dialog_from_query- Retrieved {len(results)} candidates from retriever.")
+        # 2) Pakk kandidatene i en enkel liste
+        candidates = []
+        
+        for r in results:
+            node = getattr(r, "node", r)
+            meta = getattr(node, "metadata", {}) or {}
+            node_id = getattr(node, "node_id", getattr(node, "id_", "")) or ""
+            text = _node_text(node).strip()
+            if not node_id or not text:
+                continue
 
-    # 2) Pakk kandidatene i en enkel liste
-    candidates = []
-    for r in results:
-        node = getattr(r, "node", r)
-        meta = getattr(node, "metadata", {}) or {}
-        node_id = getattr(node, "node_id", getattr(node, "id_", "")) or ""
-        text = _node_text(node).strip()
-        if not node_id or not text:
-            continue
+            # Hard-exclude: ikke foreslå nesten identisk med siste spørsmål
+            if last_q and partial_ratio(_normalize(text), _normalize(last_q)) > 92:
+                continue
 
-        # Hard-exclude: ikke foreslå nesten identisk med siste spørsmål
-        if last_q and partial_ratio(_normalize(text), _normalize(last_q)) > 92:
-            continue
+            candidates.append({
+                "node_id": str(node_id),
+                "text": text,
+                "severity": meta.get("severity", ""),
+                "category": meta.get("category", ""),
+                "score": float(getattr(r, "score", 0.0) or 0.0),
+            })
 
-        candidates.append({
-            "node_id": str(node_id),
-            "text": text,
-            "severity": meta.get("severity", ""),
-            "category": meta.get("category", ""),
-            "score": float(getattr(r, "score", 0.0) or 0.0),
-        })
+        # De-dupe på node_id og begrens
+        seen = set()
+        uniq = []
+        for c in candidates:
+            if c["node_id"] in seen:
+                continue
+            seen.add(c["node_id"])
+            uniq.append(c)
 
-    # De-dupe på node_id og begrens
-    seen = set()
-    uniq = []
-    for c in candidates:
-        if c["node_id"] in seen:
-            continue
-        seen.add(c["node_id"])
-        uniq.append(c)
+        uniq = uniq[:24]  # limit for tokens
 
-    uniq = uniq[:24]  # limit for tokens
+        if not uniq:
+            _emit("[]", event="related queries")
+            return {"related_queries": []}
 
-    if not uniq:
-        _emit("[]", event="related queries")
-        return {"related_queries": []}
+        candidates_jsonl = "\n".join(json.dumps(x, ensure_ascii=False) for x in uniq)
 
-    candidates_jsonl = "\n".join(json.dumps(x, ensure_ascii=False) for x in uniq)
+        # 3) ÉN LLM-call: velg topp 3 basert på historikk + siste spørsmål
+        prompt = (
+            "Du hjelper ungdom i Norge. Du får samtalehistorikk, siste brukerspørsmål, "
+            "og en liste med kandidatspørsmål fra en spørsmålsbank.\n\n"
+            "Oppgave:\n"
+            "- Velg MAKS 2 kandidatspørsmål som er en NATURLIG fortsettelse i dialogen.\n"
+            "- Ikke velg kandidater som bare gjentar siste spørsmål.\n"
+            "- Velg kandidater som flytter dialogen videre (avklaring, neste steg, risiko, når søke hjelp).\n"
+            "- IKKE endre teksten i kandidatene. Du skal bare returnere node_id.\n"
+            "- Hvis ingen passer, returner tom liste.\n\n"
+            f"Samtalehistorikk:\n{conversation_str}\n\n"
+            f"Siste spørsmål:\n{last_q}\n\n"
+            f"Kandidatspørsmål (JSONL):\n{candidates_jsonl}\n"
+        )
+        logging.info(f"--------------------------------\nrelated_queries_dialog_from_query- Invoking LLM for selection...")
+        logging.info(f"related_queries_dialog_from_query- Prompt: {prompt} ")
+        logging.info(f"--------------------------------\nrelated_queries_dialog_from_query- Invoking LLM for selection...")
+        selection: RelatedSelection = llm.with_structured_output(RelatedSelection).invoke(prompt)
 
-    # 3) ÉN LLM-call: velg topp 3 basert på historikk + siste spørsmål
-    prompt = (
-        "Du hjelper ungdom i Norge. Du får samtalehistorikk, siste brukerspørsmål, "
-        "og en liste med kandidatspørsmål fra en spørsmålsbank.\n\n"
-        "Oppgave:\n"
-        "- Velg MAKS 2 kandidatspørsmål som er en NATURLIG fortsettelse i dialogen.\n"
-        "- Ikke velg kandidater som bare gjentar siste spørsmål.\n"
-        "- Velg kandidater som flytter dialogen videre (avklaring, neste steg, risiko, når søke hjelp).\n"
-        "- IKKE endre teksten i kandidatene. Du skal bare returnere node_id.\n"
-        "- Hvis ingen passer, returner tom liste.\n\n"
-        f"Samtalehistorikk:\n{conversation_history}\n\n"
-        f"Siste spørsmål:\n{last_q}\n\n"
-        f"Kandidatspørsmål (JSONL):\n{candidates_jsonl}\n"
-    )
-    logging.info(f"--------------------------------\nrelated_queries_dialog_from_query- Invoking LLM for selection...")
-    logging.info(f"related_queries_dialog_from_query- Prompt: {prompt} ")
-    logging.info(f"--------------------------------\nrelated_queries_dialog_from_query- Invoking LLM for selection...")
-    selection: RelatedSelection = llm.with_structured_output(RelatedSelection).invoke(prompt)
-    logging.info(f"related_queries_dialog_from_query- LLM selection: {selection}")
 
-    selected_ids = selection.selected_node_ids[:2] if selection.selected_node_ids else []
-    selected_map = {c["node_id"]: c for c in uniq}
+        selected_ids = selection.selected_node_ids[:2] if selection.selected_node_ids else []
+        selected_map = {c["node_id"]: c for c in uniq}
 
-    picked = [selected_map[i] for i in selected_ids if i in selected_map]
+        picked = [selected_map[i] for i in selected_ids if i in selected_map]
 
-    related_queries = [
-        {"keyword": p.get("severity", ""), "query": p["text"], "node_id": p["node_id"]}
-        for p in picked
-    ]
+        related_queries = [
+            {"keyword": p.get("severity", ""), "query": p["text"], "node_id": p["node_id"]}
+            for p in picked
+        ]
 
-    _emit(json.dumps(related_queries, ensure_ascii=False), event="related queries")
+        _emit(json.dumps(related_queries, ensure_ascii=False), event="related queries")
+    except Exception as e:
+       logging.error(f"Failed to execute agent: {e} ")    
+       
     return {}
 
 
