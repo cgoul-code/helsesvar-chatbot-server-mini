@@ -595,30 +595,29 @@ def _meta_has_category(meta: dict, cat_title: str) -> bool:
 
     return False
 
+def _meta_is_valid(meta: dict) -> bool:
+    v = (meta or {}).get("valid", True)  # default True if missing (change if you prefer)
+    if isinstance(v, bool):
+        return v
+    if isinstance(v, (int, float)):
+        return v == 1
+    if isinstance(v, str):
+        return v.strip().lower() in ("true", "1", "yes")
+    return False
+
 # ------------------------------
 # NEW AGENT: /examples (one response, full list)
 # ------------------------------
+from llama_index.core.vector_stores import MetadataFilter, MetadataFilters, FilterOperator
 
 async def get_examples_full_as_stream(
     query_settings: QuerySettings,
     server_settings: ServerSettings,
     vector_store: VectorIndexStore,
 ):
-    """
-    SSE stream:
-      {"event":"examples_categories","items":[
-          { "id": "...", "title": "...", "items": [ {query,node_id}, {query,node_id}, {query,node_id} ] }
-      ]}
-      {"event":"done"}
-
-    - ONE request returns categories + items (3 random per category)
-    - Uses QA-bank metadata.category == category
-    - Does NOT use the global `categories` variable
-    """
     logging.info("------------->>get_examples_full_as_stream")
 
     try:
-        # Load QA-bank index
         vec_name_qa_bank = f"{query_settings.vectorIndex}_qa_bank"
         entry_qa_bank = vector_store.get(vec_name_qa_bank)
         if entry_qa_bank is None:
@@ -630,7 +629,6 @@ async def get_examples_full_as_stream(
 
         index_qa_bank: VectorStoreIndex = entry_qa_bank.index
 
-        # Decide which categories to include (NO global categories variable)
         requested = getattr(query_settings, "requested_categories", None)
         if isinstance(requested, list) and requested:
             categories_to_use = [str(x).strip() for x in requested if str(x).strip()]
@@ -644,36 +642,47 @@ async def get_examples_full_as_stream(
 
         out: List[Dict[str, Any]] = []
 
-        # For each category, retrieve a pool with metadata filter, then random-sample 3
+        # Optional: try to pre-filter by metadata.valid == True in the retriever
+        # (Some vector stores support this, others ignore/raise — we handle safely.)
+        valid_filters = MetadataFilters(
+            filters=[MetadataFilter(key="valid", value=1, operator=FilterOperator.EQ)]
+        )
+
         for cat_title in categories_to_use:
             cat_title = (cat_title or "").strip()
             if not cat_title:
                 continue
 
+            mapped: List[Dict[str, Any]] = []
+
+            # --- Retrieve a big pool ---
             try:
-                retriever = index_qa_bank.as_retriever(
-                    similarity_top_k=200,   # bigger pool since we filter afterwards
-                    similarity_cutoff=0.0,
-                )
+                try:
+                    # Try retriever-level filter (best if supported)
+                    retriever = index_qa_bank.as_retriever(
+                        similarity_top_k=200,
+                        similarity_cutoff=0.0,
+                        filters=valid_filters,
+                    )
+                except TypeError:
+                    # Older versions / stores that don't accept filters here
+                    retriever = index_qa_bank.as_retriever(
+                        similarity_top_k=200,
+                        similarity_cutoff=0.0,
+                    )
 
                 results = await retriever.aretrieve(cat_title)
 
-                mapped: List[Dict[str, Any]] = []
-                for nws in results or []:
-                    node = nws.node
-                    meta = getattr(node, "metadata", None) or {}
-
-                    if not _meta_has_category(meta, cat_title):
-                        continue
-
-                    item = _node_to_query_and_id(nws)
-                    if item:
-                        mapped.append(item)
             except Exception:
+                logging.exception("Retriever failed for category=%r", cat_title)
                 results = []
 
-            mapped: List[Dict[str, Any]] = []
+            # --- Post-filter strictly (always) ---
             for nws in results or []:
+                node = getattr(nws, "node", None)
+                if node is None:
+                    continue
+
                 item = _node_to_query_and_id(nws)
                 if item:
                     mapped.append(item)
@@ -683,7 +692,7 @@ async def get_examples_full_as_stream(
             out.append({
                 "id": _category_title_to_id(cat_title),
                 "title": cat_title,
-                "items": picked,  # [{query,node_id} x3]
+                "items": picked,
             })
 
         yield {"event": "examples_categories", "items": out}
