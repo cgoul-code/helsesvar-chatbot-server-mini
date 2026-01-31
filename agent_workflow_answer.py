@@ -226,7 +226,7 @@ def _make_dialog_plan(llm, history_txt: str) -> DialogPlan:
         "   Unngå å gjenta siste brukerspørsmål.\n\n"
         f"Samtalehistorikk:\n{history_txt}\n"
     )
-    print(f'<<<{prompt}>>>')
+
     return llm.with_structured_output(DialogPlan).invoke(prompt)
 
 def _extract_usage_tokens(usage_meta: dict) -> tuple[int, int]:
@@ -659,7 +659,6 @@ def analyze_query(state: State_Answer) -> Dict[str, Any]:
     planner = llm.with_structured_output(QueryPlan)
     plan: QueryPlan = planner.invoke(prompt)
     
-    print(f'<<<<Plan refined query:{plan.refined_query}\n{plan.query_severity}>>>>>>')
 
     # Vi skriver om query i state til renskrevet versjon
     return {
@@ -790,18 +789,32 @@ def query_grounded(state: WorkerState) -> Dict[str, Any]:
         best_nws = max(nodes, key=lambda n: n.score)
         best_score = float(getattr(best_nws, "score", 0.0))
         band = _classify_relevancy(best_score, thresholds)
-        logging.info("Band: %s for %r, best score: %.3f", band, question, best_score)
+
 
         refs: List[Reference] = []
-        for nws in nodes[:5]:
+        seen_urls = set()
+
+        for nws in nodes:
             node_obj = getattr(nws, "node", nws)
             meta = getattr(node_obj, "metadata", {}) or {}
+
+            url = (meta.get("url") or "").strip()
+            if not url:
+                continue
+
+            if url in seen_urls:
+                continue
+
+            seen_urls.add(url)
             refs.append({
                 "name": (meta.get("title") or "Ingen tittel").lstrip(),
-                "url": meta.get("url", "Ingen URL"),
+                "url": url,
                 "icon_url": meta.get("icon_url", "Ingen URL for ikon"),
                 "relevancy_index": float(getattr(nws, "score", 0.0)),
             })
+
+            if len(refs) >= 5:
+                break
 
         state["subquery"].response_validity_index = best_score
 
@@ -828,15 +841,16 @@ def query_grounded(state: WorkerState) -> Dict[str, Any]:
             | state["llm"].with_structured_output(GroundedAnswer)
         )
 
+        # Kjør kjeden
         ga: GroundedAnswer = chain.invoke(
             {},
             config={"callbacks": [usage_callback]},
         )
 
         in_tokens, out_tokens = _extract_usage_tokens(usage_callback.usage_metadata)
-        logging.info(
-            f"Subquery '{question}' brukte ca. {in_tokens} input tokens, {out_tokens} output tokens"
-        )
+        # logging.info(
+        #     f"Subquery '{question}' brukte ca. {in_tokens} input tokens, {out_tokens} output tokens"
+        # )
 
         # 4) Claims-verifisering – gjør den litt billigere
         #    a) Hvis du vil være raskere: dropp fuzzy (sett fuzzy_min_ratio=None)
@@ -854,7 +868,7 @@ def query_grounded(state: WorkerState) -> Dict[str, Any]:
         claims_report = results.get("claims_report", [])
         answer_wrapped = _wrap_at_nearest_space(ga.answer, width=120)
 
-        # 5) UI-output (kan også trimmes om du vil)
+        # 5) validering og UI-output med detaljer
         _emit(f"## Delspørsmål: {question}", event="systeminfo")
         _emit("## Svar på delspørsmål:", event="systeminfo")
         _emit(answer_wrapped, event="systeminfo")
@@ -1063,7 +1077,6 @@ def emit_query_answer_references(state: State_Answer) -> Dict[str, Any]:
         
         for line in short_answer.splitlines(True):
             _emit(line, event = "short_answer")
-            print(f'###short:{line}')
         _emit("\n", event = "short_answer")
 
         top5 = state["references"]

@@ -425,7 +425,7 @@ async def get_related_qa_as_stream(
     # Extract last user question (already done in QuerySettings)
     last_question = query_settings.user_content or query_settings.query
   
-    
+    print(f'query_settings.from_node_id: {query_settings.from_node_id}')
 
     # 2) Initialize and run your optimizer workflow
     init_state: State_Related = {
