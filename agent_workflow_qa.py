@@ -84,60 +84,81 @@ class DialogPlan(BaseModel):
 # Små hjelpefunksjoner
 # ---------------------------------------------------------
 
+from typing import Optional, Tuple, List
+
 def _fetch_answer_from_related_question(
     node_id: str,
-    index: Optional[VectorStoreIndex] = None,
-    index_qa: Optional[VectorStoreIndex] = None,
-
-    ) -> Optional[Tuple[str, List[Reference], str, str]]:
+    index: Optional["VectorStoreIndex"] = None,
+    index_qa: Optional["VectorStoreIndex"] = None,
+) -> Optional[Tuple[str, str, List["Reference"], str, str]]:
     """
-    Look up a Q→A hit for `query`. If the top-scored node has an 'answer' in metadata
-    and its score >= `score_threshold`, return (answer, refs). Otherwise return None.
-    """
+    Fetch QA result by node_id, but ALWAYS read answer + metadata from the QA *Document*
+    (ref doc) rather than the node.
 
-    
-    ds_qa = index_qa.storage_context.docstore    
-    qa_node = ds_qa.get_node(node_id)
-    
-    meta = getattr(qa_node, "metadata", {}) or {}
-    answer = meta.get("answer", "")
-    short_answer = meta.get("short_answer","")
-    logging.info(f"_fetch_answer_from_related_question- Retrieved answer length: {len(answer)} chars; short answer length: {len(short_answer)} chars")
-    from_doc_id = meta.get("from_doc_id", "")
-    
-    if not answer:
+    Returns:
+        (answer, short_answer, refs, category, severity) or None
+    """
+    if index_qa is None:
         return None
-    
+
+    ds_qa = index_qa.storage_context.docstore
+
+    # 1) Node is only used to locate the ref document id
+    try:
+        qa_node = ds_qa.get_node(node_id)
+    except Exception as e:
+        logging.warning(f"Could not fetch QA node {node_id}: {e}")
+        return None
+
+    ref_id = getattr(qa_node, "ref_doc_id", None) or node_id
+
+    # 2) Always read from the QA Document
+    try:
+        qa_doc = ds_qa.get_document(ref_id)
+    except Exception as e:
+        logging.warning(f"Could not fetch QA document {ref_id} for node_id={node_id}: {e}")
+        return None
+
+    qa_meta = getattr(qa_doc, "metadata", {}) or {}
+
+    answer = (qa_meta.get("answer") or "").strip()
+    short_answer = (qa_meta.get("short_answer") or "").strip()
+
+    if not answer:
+        # If you want, you can fall back to doc text, but usually answer is in metadata.
+        # answer = (getattr(qa_doc, "text", "") or "").strip()
+        logging.info(f"No answer found in QA document metadata for ref_id={ref_id}")
+        return None
+
+    from_doc_id = (qa_meta.get("from_doc_id") or "").strip()
+
+    # Baseline fields from QA doc (may be overwritten by source doc enrichment)
     title = ""
-    url = meta.get("url", "")
-    icon_url = ""
-    category = meta.get("category", "")
-    severity = meta.get("severity", "Green")
-    
+    url = (qa_meta.get("url") or "").strip()
+    icon_url = (qa_meta.get("icon_url") or "").strip()
+    category = (qa_meta.get("category") or "").strip()
+    severity = (qa_meta.get("severity") or "Green").strip()
+    refs = (qa_meta.get("references") or [])
+
+    # 3) Enrich from main/source document (preferred for title/icon/category/severity)
     if index is not None and from_doc_id:
         ds = index.storage_context.docstore
         try:
-            src_doc = ds.get_document(from_doc_id)  # <-- THIS is the key
-            text_meta = getattr(src_doc, "metadata", {}) or {}
-            title = text_meta.get("title", title)
-            url = text_meta.get("url", url)
-            icon_url = text_meta.get("icon_url", icon_url)
-            category = text_meta.get("category", category)
-            severity = text_meta.get("severity", severity)
+            src_doc = ds.get_document(from_doc_id)
+            src_meta = getattr(src_doc, "metadata", {}) or {}
+
+            title = (src_meta.get("title") or title).strip()
+            url = (src_meta.get("url") or url).strip()
+            icon_url = (src_meta.get("icon_url") or icon_url).strip()
+            category = (src_meta.get("category") or category).strip()
+            severity = (src_meta.get("severity") or severity).strip()
+
         except Exception as e:
-            logging.warning(f"Could not fetch document {from_doc_id}: {e}")
+            logging.warning(f"Could not fetch source document {from_doc_id}: {e}")
 
-
-    refs: List[Reference] = [
-        {
-            "name": title or url or "Uten tittel",
-            "url": url,
-            "icon_url": icon_url,
-            "relevancy_index": 0.0,
-        }
-    ]
 
     return answer, short_answer, refs, category, severity
+
 
 
 def get_metadata_from_node_id(state: State_Related):
@@ -308,11 +329,11 @@ def related_queries_dialog_from_query(state: State_Related) -> dict:
             query_severity=state.get("query_severity"),
             main_category=state.get("main_category"),
         )
-        print(f"related_queries_dialog_from_query- Built retriever for related queries. {state}")
+        #print(f"related_queries_dialog_from_query- Built retriever for related queries. {state}")
 
         # Du kan bruke last_q for retrieval (vanligvis best). 
         results = retriever.retrieve(last_q) or []
-        print(f"related_queries_dialog_from_query- Retrieved {len(results)} candidates from retriever.")
+        #print(f"related_queries_dialog_from_query- Retrieved {len(results)} candidates from retriever.")
         # 2) Pakk kandidatene i en enkel liste
         candidates = []
         
@@ -367,9 +388,9 @@ def related_queries_dialog_from_query(state: State_Related) -> dict:
             f"Siste spørsmål:\n{last_q}\n\n"
             f"Kandidatspørsmål (JSONL):\n{candidates_jsonl}\n"
         )
-        logging.info(f"--------------------------------\nrelated_queries_dialog_from_query- Invoking LLM for selection...")
-        logging.info(f"related_queries_dialog_from_query- Prompt: {prompt} ")
-        logging.info(f"--------------------------------\nrelated_queries_dialog_from_query- Invoking LLM for selection...")
+        #logging.info(f"--------------------------------\nrelated_queries_dialog_from_query- Invoking LLM for selection...")
+        #logging.info(f"related_queries_dialog_from_query- Prompt: {prompt} ")
+        #logging.info(f"--------------------------------\nrelated_queries_dialog_from_query- Invoking LLM for selection...")
         selection: RelatedSelection = llm.with_structured_output(RelatedSelection).invoke(prompt)
 
 

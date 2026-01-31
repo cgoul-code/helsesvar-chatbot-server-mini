@@ -162,7 +162,7 @@ def register_routes(app):
 
         try:
             payload = await request.get_json()
-            #logging.info("Received /chat payload: %r", payload)
+            logging.info("Received /chat payload: %r", payload)
 
             query_settings = get_query_settings(payload)
 
