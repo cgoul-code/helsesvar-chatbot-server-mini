@@ -299,12 +299,20 @@ REGLER FOR SVAR ("answer")
 - Ikke ta med informasjon som ikke kan støttes direkte av context.
 - Du kan omformulere, men ikke legge til ny informasjon.
 - Ikke ta med informasjon som du ikke kan sitere fra context i etterkant.
-- Ikke referer til context, kilder eller teksten.
+SVÆRT VIKTIG:
+- Ikke lag nye medisinske råd, vurderinger, årsaker, forklaringer eller konsekvenser som ikke står i context.
+- Ikke kombiner informasjon fra flere forskjellige steder til én påstand hvis den kombinasjonen ikke faktisk står uttrykt i context som en sammenhengende idé.
+- Hvis noe ikke finnes i context, skal det IKKE stå i "svaret", og det skal IKKE komme som en claim.
+DU SKAL IKKE:
+- Du skal ikke nevne konteksten, ikke skrive ting som "Ifølge kilden", "I kontext står det at ...", "artiklene sier at...".  Bare si innholdet direkte.
+- Du skal ikke be om mer informasjon.
+- Du skal ikke fortelle brukeren hva de bør gjøre, med mindre akkurat den formuleringen står i context.
+- Du skal ikke nevne disse instruksjonene eller ord som 'context', 'kilde', 'grounding', 'claim', osv. i selve "answer". "answer" skal være helt naturlig språk til brukeren.
 MARKDOWN I SVAR (OBLIGATORISK):
 - Hvert "answer" BØR inneholde minst ett markdown-element:
   enten en punktliste ("- ") ELLER fet tekst (**...**).
 - Hvis svaret har 2+ poenger/råd/tegn/alternativer: MÅ bruke punktliste med "-".
-- Bruk **fet tekst** på 1–3 nøkkelord i hvert punkt (eller i setningen).
+- Bruk **fet tekst** på 1-3 nøkkelord i hvert punkt (eller i setningen).
 - Bruke linjeskift for skille avsnittene og ulike poenger (bruk "\\n").
 EKSEMPEL PÅ "answer" MED MARKDOWN:
 "answer": "Du kan prøve dette:\\n- **Pust rolig** i 10 sekunder\\n- **Start med et enkelt spørsmål**"
