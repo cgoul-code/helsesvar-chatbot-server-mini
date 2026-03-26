@@ -332,7 +332,7 @@ professional help resources (e.g. Sex og samfunn).
 
 ## Deployment
 
-The app is deployed as an **Azure App Service** (Linux, Python 3.12). On
+The app is deployed as an **Azure App Service** (Linux, Python 3.11). On
 startup it detects the Azure environment via the `WEBSITE_SITE_NAME` environment
 variable and adjusts paths accordingly (`RunningLocally()` in `config.py`).
 

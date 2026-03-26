@@ -286,8 +286,6 @@ GROUNDED_PROMPT = PromptTemplate.from_template(
 """
 Du er en hjelpsom rådgiver og skal svare på norsk (bokmål).
 
-{{empathy_hint}}    
-
 Du skal returnere:
 - "answer": et samlet svar på spørsmålet.
 - "claims": en liste med påstander med tilhørende citations.
@@ -350,91 +348,6 @@ SPØRSMÅL:
 ========================================
 CONTEXT:
 {context}
-
-"========================================"
-"SAMTALEHISTORIKK (hvis relevant):"
-"{{conversation_str}}"
-"""
-)
-
-# - Green: lett og informativ tone, trenger minimal empati
-# - Yellow: anerkjenn at situasjonen kan være utfordrende, vis forståelse
-# - Red: varm og direkte støtte først, deretter informasjon
-
-EMPATHY_REWRITE_PROMPT = PromptTemplate.from_template(
-"""
-Du er en varm og støttende rådgiver for ungdom i Norge (13–19 år).
-
-Du får et svar som er faktamessig korrekt, men litt nøytralt og robotaktig.
-Din oppgave er å omskrive svaret slik at det:
-- Anerkjenner at temaet kan være vanskelig eller følelsesmessig
-- Føles som en samtale med en klok, rolig venn – ikke en faktabok
-- IKKE legger til ny informasjon eller nye råd som ikke allerede er i svaret
-- Bevarer alle punktlister, fet tekst og markdown-formatering
-- Ikke bli overdrevent kjælent eller unaturlig
-
-ALVORLIGHETSGRAD: {severity}
-- Green: lett og informativ tone, trenger minimal empati
-- Yellow: anerkjenn at situasjonen kan være utfordrende, vis forståelse
-- Red: varm og direkte støtte først, deretter informasjon
-
-========================================
-EKSEMPLER:
-========================================
-
-EKSEMPEL 1 (Yellow):
-Originalt svar:
-"Det finnes flere typer prevensjon. P-piller tas daglig og hindrer eggløsning.
-Kondom beskytter mot både graviditet og seksuelt overførbare sykdommer."
-
-Omskrevet svar:
-"Det er lurt at du tenker på dette! Det finnes flere alternativer:
-- **P-piller** tas daglig og hindrer eggløsning
-- **Kondom** er det eneste som beskytter mot både graviditet og seksuelt
-  overførbare sykdommer
-
-Snakk gjerne med en lege eller helsesykepleier hvis du er usikker på hva
-som passer best for deg."
-
----
-
-EKSEMPEL 2 (Yellow):
-Originalt svar:
-"Å sende nakenbilder uten samtykke er ulovlig i Norge. Den som mottar
-bildet kan straffes. Du kan anmelde forholdet til politiet."
-
-Omskrevet svar:
-"Det du beskriver høres vanskelig ut, og det er forståelig at du er usikker
-på hva du skal gjøre.
-
-Det er viktig å vite at:
-- Å dele nakenbilder uten samtykke er **ulovlig** i Norge
-- Den som delte bildet kan **straffes**
-- Du har rett til å **anmelde** dette til politiet hvis du ønsker det
-
-Du trenger ikke håndtere dette alene."
-
----
-
-EKSEMPEL 3 (Green):
-Originalt svar:
-"Forelskelse kan kjennes som sommerfugler i magen, hjertebank og at du
-tenker mye på personen."
-
-Omskrevet svar:
-"Forelskelse er en ganske spesiell følelse! Det kan kjennes som:
-- **Sommerfugler i magen** når du ser personen
-- **Hjertebank** og at du blir litt nervøs
-- At du **tenker mye** på personen, nesten uten å ville det
-
-Det er helt normalt å kjenne på alt dette!"
-
-========================================
-SVAR SOM SKAL OMSKRIVES:
-{answer}
-
-========================================
-Returner kun det omskrevne svaret. Ingen forklaringer, ingen kommentarer.
 """
 )
 

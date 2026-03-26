@@ -443,7 +443,7 @@ async def get_related_qa_as_stream(
         
         # defaults:
         "main_category": "",
-        "query_severity": "",
+        "query_severity": Literal["Green", "Yellow", "Red", ""],
         "references": [],
         "final_answer": "",
         "final_short_answer": ""

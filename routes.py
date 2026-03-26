@@ -3,7 +3,6 @@ import logging, json, asyncio
 from typing import Any, Dict, List, Optional, Tuple
 from config import server_settings, vector_store
 import secrets
-import diskcache
 from query_utils import get_query_settings
 from answer_utils import (
     get_answer_as_stream, get_related_qa_as_stream, get_examples_full_as_stream
@@ -15,8 +14,7 @@ AGENT_REGISTRY = {
     "hvaerinnafor_examples": get_examples_full_as_stream, 
 }
 
-SESSION_STORE = diskcache.Cache("./session_cache")
-
+SESSION_STORE: dict[str, list[dict]] = {}
 
 def _format_sse(data: str, event: str | None = None) -> str:
     """Format one SSE message (optionally named), ending with a blank line."""
@@ -85,64 +83,20 @@ def register_routes(app):
             return None
 
         return last
-    
-    MAX_HISTORY_MESSAGES = 20      # maks antall meldinger (user + assistant)
-    MAX_HISTORY_CHARS    = 8_000   # maks tegn total i historikken
 
-
-    def _trim_history(history: List[Dict[str, str]]) -> List[Dict[str, str]]:
-        """
-        Kutter historikken fra eldste ende til den er innenfor begge grensene.
-        Bevarer alltid par (user → assistant) for å unngå at historikken
-        starter midt i en utveksling.
-        """
-        # 1) Kapp på antall meldinger
-        if len(history) > MAX_HISTORY_MESSAGES:
-            history = history[-MAX_HISTORY_MESSAGES:]
-
-        # 2) Kapp på totalt antall tegn
-        while history:
-            total_chars = sum(len(m.get("content", "")) for m in history)
-            if total_chars <= MAX_HISTORY_CHARS:
-                break
-            # Fjern eldste melding, men behold alltid minst én user+assistant-runde
-            if len(history) <= 2:
-                break
-            history = history[1:]
-
-        # 3) Sørg for at historikken starter med en user-melding (ikke et halvt par)
-        while history and history[0].get("role") != "user":
-            history = history[1:]
-
-        return history
-
-    def _store_user_message(
-        session_id: str,
-        history: List[Dict[str, str]],
-        user_msg: Optional[Dict[str, str]],
-    ) -> List[Dict[str, str]]:
+    def _store_user_message(session_id: str, history: List[Dict[str, str]], user_msg: Optional[Dict[str, str]]) -> List[Dict[str, str]]:
         if user_msg and user_msg.get("content"):
             if not _is_duplicate_last(history, user_msg):
                 history.append({"role": "user", "content": user_msg["content"]})
-
-        # Trim før lagring så SESSION_STORE aldri vokser ubegrenset
-        history = _trim_history(history)
         SESSION_STORE[session_id] = history
         return history
 
-    def _store_assistant_message(
-        session_id: str,
-        history: List[Dict[str, str]],
-        assistant_text: str,
-    ) -> List[Dict[str, str]]:
+    def _store_assistant_message(session_id: str, history: List[Dict[str, str]], assistant_text: str) -> List[Dict[str, str]]:
         assistant_text = (assistant_text or "").strip()
         if assistant_text:
             msg = {"role": "assistant", "content": assistant_text}
             if not _is_duplicate_last(history, msg):
                 history.append(msg)
-
-        # Trim etter assistant også — et langt svar kan alene overskride grensen
-        history = _trim_history(history)
         SESSION_STORE[session_id] = history
         return history
     

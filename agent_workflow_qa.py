@@ -21,6 +21,13 @@ from agent_shared import Reference, _emit, _node_text, _build_related_queries_re
 # ---------------------------------------------------------
 # Datamodeller og typer
 # ---------------------------------------------------------
+
+class Reference(TypedDict):
+    name: str
+    url: str
+    icon_url: str
+    relevancy_index: float
+    
     
 class State_Related(TypedDict):
     # infra
