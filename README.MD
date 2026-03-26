@@ -1,239 +1,348 @@
-## Llama Index Server Application
+# HEI 2.0 — KI-chatbot backend
 
-A server application demonstrating Retrieval-Augmented Generation (RAG) with Azure OpenAI and LlamaIndex, powered by LangChain. This project, developed by **Helsedirektoratet** as part of the **HelseSvar** initiative, provides a chat-like server interface for querying and retrieving indexed health articles.
-
----
-
-### Features
-
-- **Azure OpenAI Integration**: Utilizes Azure OpenAI models for advanced language understanding.
-- **Vector Indexing**: Stores and retrieves text data using LlamaIndex.
-- **Natural Language Queries**: Supports conversational queries over indexed data.
-- **Context-Aware Responses**: Generates answers based on search results.
-- **Agent Workflow**: Orchestrates multi-step reasoning for structured answers.
-- **Support markdowns**: Answers include markdown markup 
+Backend for the AI chatbot in **«Hva er innafor» 2.0 (HEI 2.0)**, developed by
+Helsedirektoratet. The chatbot answers questions about relationships, sexuality,
+feelings, and sexual health aimed at Norwegian youth aged 13–19.
 
 ---
 
-### Prerequisites
+## Table of contents
 
-- **Python**: Version 3.13 or newer
-- **Quart**: ASGI web framework for Python
-- **Azure OpenAI Service**: An active resource with deployment name, API key, endpoint, and API version
-
----
-
-### Installation
-
-1. **Clone the repository**:
-    ```bash
-    git clone <repository_url>
-    cd <repository_folder>
-    ```
-
-2. **Create a virtual environment** (optional but recommended):
-    ```bash
-    python -m venv .venv
-    source .venv/bin/activate  # On Windows: .\.venv\Scripts\activate
-    ```
-
-3. **Install dependencies**:
-    ```bash
-    pip install -r requirements.txt
-    ```
+- [Overview](#overview)
+- [Architecture](#architecture)
+- [Agent workflow](#agent-workflow)
+- [Project structure](#project-structure)
+- [Prerequisites](#prerequisites)
+- [Configuration](#configuration)
+- [Running locally](#running-locally)
+- [API endpoints](#api-endpoints)
+- [Session management](#session-management)
+- [Severity classification](#severity-classification)
+- [Adding new content](#adding-new-content)
+- [Deployment](#deployment)
 
 ---
 
-### Configuration
+## Overview
 
-1. **Create a `.env` file** in the project root with the following keys:
-    ```dotenv
-    AZURE_OPENAI_MODEL=<your_model_name>
-    AZURE_OPENAI_DEPLOYMENT_NAME=<your_deployment>
-    AZURE_OPENAI_API_KEY=<your_api_key>
-    AZURE_OPENAI_AZURE_ENDPOINT=<your_endpoint>
-    AZURE_OPENAI_API_VERSION=<your_api_version>
-    OPENAI_API_KEY=<your_openai_key>  # Optional if using Azure only
-    ```
+The backend is a streaming HTTP API built with **Quart** (async Flask). It
+exposes three endpoints consumed by the HEI 2.0 frontend:
 
-2. **Data Indexing**
-   - By default, the application indexes health articles from the folder:
-   ```
-   blobstorage/chatbot/helsenorgeartikler
-   ```
-   - The repository includes a prebuilt vector index of 1,853 pages from Helsenorge.no.
-   - unzip the file helsenorgeartikler.zip in the same folder
+| Endpoint | Purpose |
+|---|---|
+| `POST /chat` | Main Q&A — returns a grounded, empathy-rewritten answer |
+| `POST /examples` | Returns categorised example questions for the landing page |
+| `POST /chat` (agent `hvaerinnafor_related_qa`) | Returns a pre-written answer for a question clicked from the related-questions list |
+
+Answers are streamed as **Server-Sent Events (SSE)** so the frontend can render
+text progressively.
 
 ---
 
-
-### Project Structure
+## Architecture
 
 ```
+Frontend
+   │  SSE stream
+   ▼
+Quart HTTP server  (app.py / routes.py)
+   │
+   ├── /chat  ──────────────────────────────────────────────────┐
+   │                                                            │
+   │   answer_utils.py                                          │
+   │       └── get_answer_as_stream()                          │
+   │               │                                            │
+   │               ▼                                            │
+   │         LangGraph workflow  (agent_workflow_answer.py)    │
+   │               │                                            │
+   │         ┌─────┴──────┐                                    │
+   │    analyze_query   (rewrite + severity)                    │
+   │         │                                                  │
+   │    ┌────┴─────┐                                            │
+   │ fast_single  orchestrator  (multi-subquery)                │
+   │    │              │                                        │
+   │    │         query_grounded  ×N  (parallel workers)        │
+   │    │              │                                        │
+   │    │         synthesizer                                   │
+   │    └──────────────┘                                        │
+   │         │                                                  │
+   │    empathy_rewrite                                         │
+   │         │                                                  │
+   │    emit_query_answer_references                            │
+   │         │                                                  │
+   │    related_queries_dialog_from_query                       │
+   │                                                            │
+   ├── /chat  (agent: hvaerinnafor_related_qa) ────────────────┘
+   │   agent_workflow_qa.py  →  fetch pre-written answer by node_id
+   │
+   └── /examples
+       answer_utils.py  →  get_examples_full_as_stream()
+```
 
-   ├── .env                                     # Secret keys
-   ├── requirements.txt
-   ├── app.py                                   # Main application entry point
-   ├── config.py                                # Server configuration loader
-   ├── answer_utils.py                          # Query handling and answer generation
-   ├── query_utils.py                           # Query parsing utilities
-   ├── routes/                                  # HTTP route definitions
-   ├── agent_workflow_structured_answer.py      # Agent workflow implementation
-   └── blobstorage/chatbot/helsenorgeartikler   # Indexed article data
+**Vector indexes** (LlamaIndex, persisted to Azure Blob Storage mount):
+
+| Index name | Content |
+|---|---|
+| `hvaerinnafor` | Source articles — the factual knowledge base |
+| `hvaerinnafor_qa_bank` | Pre-written Q&A pairs used for related questions and fast answers |
+
+---
+
+## Agent workflow
+
+The main `/chat` workflow (`agent_workflow_answer.py`) runs as a LangGraph state
+machine:
+
+```
+START
+  └─► analyze_query          Rewrites query, detects severity (Green/Yellow/Red),
+                              decides if subqueries are needed
+        ├─► fast_single       Single question — one worker, direct answer
+        └─► orchestrator      Multi-topic — splits into subqueries
+              └─► query_grounded  ×N   Retrieval → grounded answer → citation check
+                    └─► synthesizer   Merges sub-answers into one coherent response
+                          └─► empathy_rewrite   Adds warmth/empathy based on severity
+                                └─► emit_query_answer_references   Streams answer + refs
+                                      └─► related_queries_dialog_from_query   Suggests follow-up Qs
+END
+```
+
+### Grounding and citation verification
+
+Each worker node (`query_grounded`) retrieves source nodes, generates a
+`GroundedAnswer` (answer + claims + citations), then verifies every citation
+quote against the retrieved text. A subquery answer is accepted if at least 50%
+of its claims have at least one verified citation.
+
+### Severity levels
+
+| Level | Meaning | Example |
+|---|---|---|
+| **Green** | General information, preventive | "What is consent?" |
+| **Yellow** | Difficult situation, needs empathy | "I regret sending a nude photo" |
+| **Red** | Acute crisis, needs immediate help | "I was assaulted yesterday" |
+
+Severity affects which related questions are shown, the empathy rewrite
+intensity, and which fallback placeholder is used when no answer is found.
+
+---
+
+## Project structure
+
+```
+.
+├── app.py                        Quart app entry point
+├── routes.py                     HTTP route handlers + session management
+├── config.py                     LLM + embedding setup, index loading
+├── query_utils.py                QuerySettings dataclass
+├── answer_utils.py               Agent entry points (stream wrappers)
+├── agent_workflow_answer.py      Main LangGraph Q&A workflow
+├── agent_workflow_qa.py          Related-question lookup workflow
+├── agent_shared.py               Shared helpers (emit, normalize, retriever builder)
+├── registry.py                   All prompt templates (GROUNDED_PROMPT, EMPATHY_REWRITE_PROMPT, …)
+├── json_utils.py                 Safe JSON parsing for LLM outputs
+├── graph_utils.py                Mermaid diagram export helper
+├── requirements.txt
+└── .env                          Environment variables (not committed)
 ```
 
 ---
 
-### Agent Workflow Visualization
+## Prerequisites
 
-![Agent Workflow](./docs/agent_workflow_structured_answer.png)
+- Python 3.11+
+- Access to **Azure OpenAI** (chat completion + embeddings deployments)
+- Vector indexes built and available at the paths in `VECTOR_INDEX_MAP` (see
+  `config.py`), either locally or mounted from Azure Blob Storage
 
+---
 
+## Configuration
 
-### Running Locally
+Copy `.env.example` to `.env` and fill in all values:
 
-Start the server on port 80:
+```env
+# Azure OpenAI — chat completion
+AZURE_OPENAI_DEPLOYMENT_NAME=gpt-4o-mini
+AZURE_OPENAI_API_VERSION=2024-02-01
+AZURE_OPENAI_API_KEY=<your-key>
+AZURE_OPENAI_ENDPOINT=https://<your-resource>.openai.azure.com/
+
+# Azure OpenAI — embeddings
+AZURE_OPENAI_EMBEDDINGS_MODEL=text-embedding-3-large
+AZURE_OPENAI_EMBEDDINGS_DEPLOYMENT=text-embedding-3-large
+AZURE_OPENAI_EMBEDDINGS_API_KEY=<your-key>
+AZURE_OPENAI_EMBEDDINGS_ENDPOINT=https://<your-resource>.openai.azure.com/
+AZURE_OPENAI_EMBEDDINGS_API_VERSION=2024-02-01
+
+# Cost tracking (USD per 1 million tokens)
+PRICE_INPUT_USD_PER_M=0.15
+PRICE_OUTPUT_USD_PER_M=0.60
+```
+
+---
+
+## Running locally
 
 ```bash
-python app.py
-```
+# 1. Create and activate virtual environment
+python -m venv .venv
+source .venv/bin/activate        # Windows: .venv\Scripts\activate
 
-Open your browser at `http://localhost:80` to interact with the chat interface.
-
----
-
-### Testing with Postman
-
-#### Download and install Postman:
-
-- Visit https://www.postman.com/downloads/ and select the appropriate installer for your OS.
-
-- Follow the installation prompts.
-
-#### Create a new request:
-
-- Open Postman and click New > HTTP Request.
-
-- Set the method to POST and the URL to http://127.0.0.1:80/chat.
-
-#### Configure the request body:
-
-- Select Body > raw and choose JSON from the dropdown.
-
-
-#### Paste the following JSON payload:
-```bash
-
-{
-  "messages": [
-    {
-      "role": "user",
-      "content": "Hvordan fungerer en hjertestarter?"
-    }
-  ],
-  "similarity_top_k": "10",      # how many documents from the vectorindex to work with
-  "similarity_cutoff": "0.75",   # index for simularity
-  "vectorIndex": "helsenorgeartikler",  # vectorindex to work with
-  "agent": "agent_workflow_structured_answer", # agent used for answering the query
-}
-```
-
-#### Send the request:
-
-- Click Send.
-
-- Inspect the response in the Postman console to verify the server's output. It shoud respond something like:
-``` bash
-{
-    "answer": "# Oppsummering av spørsmålet\n\n## Spørsmålet fra brukeren\nHvordan fungerer en hjertestarter?\n\n## Tittel\nHvordan jeg bruker en hjertestarter?\n\n## Kort sammendrag av spørsmålet\nBrukeren spør om hvordan en hjertestarter fungerer.\n\n## Lettlest svar\nEn hjertestarter brukes ved hjertestans sammen med hjerte- og lungeredning (HLR). Når noen opplever hjertestans, kan en hjertestarter bidra til å gjenopprette en normal hjerterytme. \n\nSlik fungerer en hjertestarter:\n1. En hjertestarter brukes ved hjertestans. Den har to elektroder som festes på brystet til personen i hjertestans.\n2. Ved hjelp av disse elektrodene kan hjertestarteren gi ett eller flere strømstøt gjennom hjertet. Dette gir hjertet en sjanse til å starte på nytt med riktig rytme.\n3. Hjertestarteren analyserer hjerterytmen og gir instruksjoner om hva du skal gjøre. Hvis strømstøt ikke vil ha effekt, vil hjertestarteren be deg fortsette med hjerte- og lungeredning.\n4. Hjertestarteren vil også be deg om å stoppe HLR for å analysere hjerterytmen på nytt hvert tredje minutt.\n5. Dersom personen har ventrikkelflimmer eller ventrikkeltakykardi (kaotiske hjerterytmer), vil hjertestarteren anbefale å gi strømstøt ved å trykke på sjokknappen.\n6. Etter at strømstøt er gitt, må du fortsette med HLR inntil ambulansen kommer eller til du ser sikre tegn til liv.\n\nDet er viktig å følge hjertestarterens instruksjoner nøye og fortsette med hjerte- og lungeredning til ambulansepersonell overtar eller til personen viser tegn til liv.\n\n## Referanser\n- [Slik bruker du hjertestarter - Helsenorge](https://www.helsenorge.no/forstehjelp/bruk-av-hjertestarter/) (Relevans: 0.89)\n- [Slik bruker du hjertestarter - Helsenorge](https://www.helsenorge.no/forstehjelp/bruk-av-hjertestarter/) (Relevans: 0.88)\n- [Phillips Heart Start 1 - Helsenorge](https://www.helsenorge.no/forstehjelp/registrer-din-hjertestarter/phillips-heart-start-1/) (Relevans: 0.85)\n- [Registrer din hjertestarter - Helsenorge](https://www.helsenorge.no/forstehjelp/registrer-din-hjertestarter/) (Relevans: 0.85)\n- [Phillips Heartstart FRX - Helsenorge](https://www.helsenorge.no/forstehjelp/registrer-din-hjertestarter/phillips-heartstart-frx/) (Relevans: 0.85)\n- [Philips HeartStart FR3 - Helsenorge](https://www.helsenorge.no/forstehjelp/registrer-din-hjertestarter/philips-heartstart-fr3/) (Relevans: 0.84)\n- [Hjartestans – Ring 113 og start hjartekompresjonar - Helsenorge](https://www.helsenorge.no/sykdom/hjerte-og-kar/hjertestans/) (Relevans: 0.84)\n- [Hjerte- og lungeredning (HLR) - slik gir du livreddende førstehjelp - Helsenorge](https://www.helsenorge.no/forstehjelp/hjerte-og-lungeredning/) (Relevans: 0.84)\n- [Hjartestans – Ring 113 og start hjartekompresjonar - Helsenorge](https://www.helsenorge.no/sykdom/hjerte-og-kar/hjertestans/) (Relevans: 0.83)\n- [Primedic Heartsave ONE - Helsenorge](https://www.helsenorge.no/forstehjelp/registrer-din-hjertestarter/primedic-heartsave-one/) (Relevans: 0.83)\n"
-}
-```
-![Postman example](./docs/postman.png)
-
----
-
-### Deployment to Azure
-
-1. **Create a Web App** on Azure with Python 3.13 runtime.
-2. **General Settings**:
-   - **Startup Command**: `bash startup.sh`
-   - **SCM/FTPS Basic Auth**: Enabled
-   - **Path Mapping**: `mountName=chatbot`, `mountPath=/blobstorage/chatbot`
-3. **Deployment Center**:
-   - Connect to your GitHub repo for continuous deployment.
-4. **Blob Storage**:
-   - Create a storage account and container named `chatbot`.
-   - Upload the `helsenorgeartikler` folder to `chatbot` container.
-
----
-
-Now you’re ready to explore health-related queries with RAG and agent-driven workflows!
-
-
-### Technical developper tips
-## requirements.txt
-pip freeze >> requirements.txt
+# 2. Install dependencies
 pip install -r requirements.txt
-remember to remove pywin32==306 from requirements.txt
-pywinpty==3.0.0; sys_platform == "win32"
 
-## to run build script for vectorindex (as a module):
-python -m utils.create_vectorindex.build_hei_index
+# 3. Set up environment variables
+cp .env.example .env
+# edit .env with your Azure credentials
 
+# 4. Place vector indexes at the expected paths (or symlink them):
+#    ./blobstorage/chatbot/hvaerinnafor
+#    ./blobstorage/chatbot/hvaerinnafor_qa_bank
 
-## reinstall 
-# 0) Close any Python terminals/VSCode tasks using the venv
+# 5. Start the server
+python app.py
+# Server starts at http://0.0.0.0:80
+```
 
-# 1) Delete the existing venv
-Remove-Item -Recurse -Force .\.venv
+The server loads indexes asynchronously after startup. The `/chat` endpoint
+returns HTTP 503 until indexes are ready.
 
-# 2) Recreate & activate
-python -m venv .venv 
-& .\.venv\Scripts\Activate.ps1
+---
 
-# 3) Upgrade build tooling
-python -m pip install -U pip wheel setuptools
+## API endpoints
 
-# 4) Clear the pip cache (user-level, outside venv)
-pip cache dir
-pip cache purge
-# If 'pip cache purge' isn’t available, delete the folder shown by "pip cache dir":
-# Remove-Item -Recurse -Force "$env:LocalAppData\pip\Cache"
+### `POST /chat`
 
-# 5) Fresh install from requirements.txt with no cache
-.\.venv\Scripts\python.exe -m pip install --no-cache-dir -r requirements.txt
+Streams an answer to a user question.
 
-## Tips for reinstall llama-index:
-pip install llama-index --upgrade --no-cache-dir --force-reinstall 
-pip check    
+**Request body:**
+```json
+{
+  "agent": "hvaerinnafor",
+  "vectorIndex": "hvaerinnafor",
+  "query": "Hva er egentlig forelskelse?",
+  "session_id": "abc123",
+  "messages": [
+    { "role": "user", "content": "Hva er egentlig forelskelse?" }
+  ],
+  "similarity_top_k": 10,
+  "similarity_cutoff": 0.45
+}
+```
 
-:
-git config --edit
+**SSE events emitted:**
 
-start server: hypercorn server:app --bind 0.0.0.0:80
+| Event name | Content |
+|---|---|
+| `answer` | Answer text delta (markdown) |
+| `short_answer` | One-sentence summary |
+| `references` | `[Title](url) \|\|IMG\|\| icon_url` per source |
+| `related queries` | JSON array of follow-up question suggestions |
+| `Refined query` | Rewritten version of the user's question |
+| `info` | Internal pipeline step names (for debugging) |
+| `systeminfo` | Citation verification details (for debugging) |
+| `Token usage` | Token counts and estimated NOK cost |
+| `done` | Stream completed |
+| `error` | Error message if something failed |
 
-azure CLI:
-(i powershell: az login --tenant helsedir.no)
+To use the **related-question fast path**, set `agent` to
+`hvaerinnafor_related_qa` and include `from_node_id` (the node ID from a
+previously emitted `related queries` item).
 
-to access /Home dir:
-az webapp ssh --name chatbot3-llama-server --resource-group rg-webappaichatbot
+### `POST /examples`
 
-To access logging:
-az webapp log config -g rg-webappaichatbot -n helsesvar-chatbot-server-mini --web-server-logging filesystem
-az webapp log tail  -g rg-webappaichatbot -n helsesvar-chatbot-server-mini
+Returns categorised example questions for the landing page. No streaming — emits
+a single `examples_categories` event followed by `done`.
 
-cd /home/logs
-cat requests.log.2025-05-2
+**Request body:**
+```json
+{
+  "agent": "hvaerinnafor_examples",
+  "vectorIndex": "hvaerinnafor",
+  "requested_categories": ["Forelskelse / Flørting", "Sex / Intimitet"]
+}
+```
 
-Download the containers:
- az storage blob download-batch --destination C:/Users/ChristianGoulignac/Downloads --source chatbot --account-name helsesvar --account-key COzcrGBg34QJ+KF1yAXG71xuIlbzFIDk2MxjH7If7Dfa22vhU5CftWhqrqFx+u10Pa+B85ryt3NR+AStEIpHLA==
+**Response event:**
+```json
+{
+  "event": "examples_categories",
+  "items": [
+    {
+      "id": "forelskelse-/-florting",
+      "title": "Forelskelse / Flørting",
+      "items": [
+        { "query": "Hvordan vet jeg om jeg er forelsket?", "node_id": "abc" }
+      ]
+    }
+  ]
+}
+```
 
-## kjøre build index under utils:
-# C:\Users\ChristianGoulignac\vscode\llama
-.\llama_chatbot_server_mini\.venv\Scripts\python.exe -m llama_chatbot_server_mini.utils.create_vectorindex.build_hei_index
+---
 
-## kjøre editoren
-python.exe -m utils.editor.editor_api
+## Session management
 
-## Kjøre testene
-python -m test.data.batch_answer_to_excel --input test/data/sample_questions.json --out test/data/answers.xlsx --vector-index hvaerinnafor
+Conversation history is stored server-side in a **diskcache** store
+(`./session_cache`), keyed by `session_id`. The frontend receives the
+`session_id` in the `open` event and should include it in subsequent requests.
+
+History is automatically trimmed to stay within:
+- **20 messages** maximum
+- **8 000 characters** total
+
+Trimming always preserves complete user/assistant pairs and ensures history
+starts with a user message.
+
+---
+
+## Severity classification
+
+The `analyze_query` node classifies every incoming question into one of three
+severity levels before retrieval. This affects:
+
+- Which related questions are surfaced (Green questions only see Green
+  candidates; Yellow sees Green + Yellow; Red sees all)
+- The tone of the empathy rewrite step
+- Which fallback placeholder is shown when no answer is found
+
+For **Red** severity questions, the fallback always directs the user to
+professional help resources (e.g. Sex og samfunn).
+
+---
+
+## Adding new content
+
+1. **New articles** — add source documents to the `hvaerinnafor` index using
+   the existing ingestion pipeline. Each document needs `title`, `url`, and
+   optionally `icon_url` in its metadata.
+
+2. **New Q&A pairs** — add entries to the `hvaerinnafor_qa_bank` index. Each
+   node needs `answer`, `short_answer`, `severity`, `category`, `valid: 1`,
+   and `from_doc_id` pointing to the source article.
+
+3. **New categories** — add to the `categories` list in `answer_utils.py`.
+
+4. **New topics** — update the severity classification prompt in
+   `analyze_query` (`agent_workflow_answer.py`) and the category list in
+   `registry.py` (`REFINE_AND_CLASSIFY` prompt).
+
+---
+
+## Deployment
+
+The app is deployed as an **Azure App Service** (Linux, Python 3.12). On
+startup it detects the Azure environment via the `WEBSITE_SITE_NAME` environment
+variable and adjusts paths accordingly (`RunningLocally()` in `config.py`).
+
+Vector indexes are mounted as a path from Azure Blob Storage at
+`/blobstorage/chatbot/`.
+
+The app listens on port 80 and is served directly by Quart's built-in ASGI
+server in production. For higher throughput, consider fronting it with
+**Hypercorn** (already in `requirements.txt`):
+
+```bash
+hypercorn app:app --bind 0.0.0.0:80 --workers 2
+```

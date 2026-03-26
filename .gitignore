@@ -14,10 +14,9 @@
 *.jpg
 
 garbage
-
-blobstorage/chatbot/*/*.json
-
-vector-index/*
+old
+session_cache/
+README_UTILS.md
 
 storage/*
 

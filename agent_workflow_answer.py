@@ -31,9 +31,13 @@ from langchain_core.callbacks import UsageMetadataCallbackHandler
 
 from rapidfuzz.fuzz import partial_ratio
 
-from registry import subqueries_prompt, GROUNDED_PROMPT, CANNOT_ANSWER_PLACEHOLDER
+from registry import subqueries_prompt, GROUNDED_PROMPT, CANNOT_ANSWER_PLACEHOLDER, EMPATHY_REWRITE_PROMPT
 
 from agent_shared import Reference, _emit, _node_text, _build_related_queries_retriever, _as_int, _as_float, _dedupe_references, _normalize
+
+import typing
+import typing_extensions
+typing.TypedDict = typing_extensions.TypedDict
 
 # Hvor mange noder sender vi inn i LLM-konteksten?
 MAX_NODES_FOR_CONTEXT = 8
@@ -42,7 +46,7 @@ MAX_NODES_FOR_CONTEXT = 8
 MAX_NODES_FOR_VERIFICATION = 8
 
 # Hvor mange tegn per node som brukes
-MAX_CHARS_PER_NODE = 1500
+MAX_CHARS_PER_NODE = 2500
 
 
 # Hvis best_score > dette → vi anser treffet som veldig godt og kan gjøre mindre arbeid
@@ -51,14 +55,6 @@ HIGH_CONFIDENCE_THRESHOLD = 0.82
 # ---------------------------------------------------------
 # Datamodeller og typer
 # ---------------------------------------------------------
-
-class Reference(TypedDict):
-    name: str
-    url: str
-    icon_url: str
-    relevancy_index: float
-    
-
 
 class Citation(BaseModel):
     url: str
@@ -191,6 +187,8 @@ class WorkerState(TypedDict):
     query_engine: BaseQueryEngine
     retriever: BaseRetriever
     llm: Any
+    conversation_str: str  
+    query_severity: str     
     
 
 _POSSIBLE_META_IDS = ("doc_id", "from_doc_id", "document_id", "source_id")
@@ -215,6 +213,18 @@ def _pick_cannot_answer_placeholder(query_severity: str) -> str:
         eligible = CANNOT_ANSWER_PLACEHOLDER
 
     return random.choice(eligible)["answer"]
+
+# Generisk wrapper:
+def _invoke_with_usage(llm, messages) -> tuple[Any, int, int]:
+    """
+    Kaller llm.invoke med UsageMetadataCallbackHandler.
+    messages kan være str, PromptValue, eller List[BaseMessage].
+    Returnerer (result, input_tokens, output_tokens).
+    """
+    callback = UsageMetadataCallbackHandler()
+    result = llm.invoke(messages, config={"callbacks": [callback]})
+    in_tok, out_tok = _extract_usage_tokens(callback.usage_metadata)
+    return result, in_tok, out_tok
 
 def _make_dialog_plan(llm, history_txt: str) -> DialogPlan:
     prompt = (
@@ -309,7 +319,15 @@ def _format_context_from_nodes(
         txt = _node_text(node).strip()
         if not txt:
             continue
-        txt = txt[:max_chars_per_node]
+        truncated = txt[:max_chars_per_node]
+        
+        # finn siste avsnitt eller punktum
+        last_break = max(
+            truncated.rfind("\n\n"),
+            truncated.rfind(". "),
+        )
+        txt =  truncated[:last_break + 1] if last_break > max_chars_per_node // 2 else truncated
+        
         parts.append(f"[{did}]\n{textwrap.dedent(txt)}")
     return "\n\n".join(parts)
 
@@ -628,10 +646,11 @@ def analyze_query(state: State_Answer) -> Dict[str, Any]:
         "Oppgave:\n"
         "1) Skriv brukerens siste spørsmål om til én kort, tydelig og konkret formulering "
         "på norsk, uten å endre meningen.\n"
+        
         "2) Vurder om spørsmålet bør deles opp i flere delspørsmål for å gi et godt svar.\n"
-        "   Sett needs_subqueries = True hvis:\n"
-        "   - det spørres om flere forskjellige ting/temaer, \n"
-        "   Ellers False.\n\n"
+        "- Sett needs_subqueries = True KUN hvis spørsmålet inneholder 3+ helt separate temaer.\n"
+        "- For de fleste spørsmål er False riktig.\n"
+        
         "3) Kategoriser alvorlighetsgraden av spørsmålet i én av tre kategorier: \"Green\", \"Yellow\", eller \"Red\".\n\n"
         "ALVORLIGHESGRAD \"GREEN\":\n"
         "- Forebyggende og trygghetsskapende.\n"
@@ -712,6 +731,8 @@ def fast_single(state: State_Answer) -> Dict[str, Any]:
         "query_engine": state["query_engine"],
         "retriever": state["retriever"],
         "llm": state["llm"],
+        "conversation_str": state.get("conversation_str", ""),
+        "query_severity": state.get("query_severity", "Green"),
     }
 
     # Kjør eksisterende logikk (henter noder, genererer GroundedAnswer,
@@ -729,12 +750,16 @@ def fast_single(state: State_Answer) -> Dict[str, Any]:
     final_short_answer = placeholder
     
     refs = []
+    
+    # Determine validate_response_result based on validity
+    validate_response_result = "Rejected"  # default
 
     # ---------- HER BRUKER VI CLAIMS-VALIDERINGA ----------
     if completed.response_validity == "valid":
         final_answer = completed.answer or final_answer
         final_short_answer = completed.short_answer or ""
         refs = _dedupe_references(completed.references or [], top_k=5)
+        validate_response_result = "Accepted"  # override if valid
     # ------------------------------------------------------
 
     # Oppdater state-feltene som brukes senere
@@ -745,6 +770,7 @@ def fast_single(state: State_Answer) -> Dict[str, Any]:
         "references": refs,
         "input_tokens": (state.get("input_tokens", 0) or 0) + in_tokens,
         "output_tokens": (state.get("output_tokens", 0) or 0) + out_tokens,
+        "validate_response_result": validate_response_result,
     }
     
 def route_after_analysis(state: State_Answer) -> str:
@@ -766,6 +792,15 @@ def query_grounded(state: WorkerState) -> Dict[str, Any]:
     try:
         retriever = state["retriever"]
         question = state["subquery"].subquery
+        severity = state.get("query_severity", "Green")
+        
+        empathy_instruction = ""
+        #if severity in ("Yellow", "Red"):
+        empathy_instruction = (
+            "Hvis brukeren beskriver noe vanskelig. Anerkjenn at dette kan oppleves tøft "
+            "før du gir informasjon. Vis empati, men bare basert på det som faktisk "
+            "er relevant for spørsmålet.\n"
+        )
 
         # 1) Retrieval
         nodes = retriever.retrieve(question) or []
@@ -833,21 +868,17 @@ def query_grounded(state: WorkerState) -> Dict[str, Any]:
         nodes_for_verification = nodes[:MAX_NODES_FOR_VERIFICATION]
 
         ctx = _format_context_from_nodes(nodes_for_context)
-        usage_callback = UsageMetadataCallbackHandler()
-
-        chain = (
-            RunnableLambda(lambda _: {"question": question, "context": ctx})
-            | GROUNDED_PROMPT
-            | state["llm"].with_structured_output(GroundedAnswer)
+        prompt_value = GROUNDED_PROMPT.format(
+            question=question,
+            context=ctx,
+            empathy_hint=empathy_instruction,
         )
 
-        # Kjør kjeden
-        ga: GroundedAnswer = chain.invoke(
-            {},
-            config={"callbacks": [usage_callback]},
+        ga, in_tokens, out_tokens = _invoke_with_usage(
+            state["llm"].with_structured_output(GroundedAnswer),
+            prompt_value,
         )
 
-        in_tokens, out_tokens = _extract_usage_tokens(usage_callback.usage_metadata)
         # logging.info(
         #     f"Subquery '{question}' brukte ca. {in_tokens} input tokens, {out_tokens} output tokens"
         # )
@@ -921,6 +952,26 @@ def query_grounded(state: WorkerState) -> Dict[str, Any]:
                 _emit(s, event="systeminfo")
 
             any_cit_problem = any(cit["problems"] for cit in citations_report)
+            # --------------------------------------
+            # streng validering: hvis noen sitater har problemer, forkast hele svaret
+            #
+            # if any_cit_problem:
+            #     _emit("**Detaljer per sitat:**", event="systeminfo")
+            #     for cit in citations_report:
+            #         if not cit["problems"]:
+            #             continue
+            #         cit_i = cit["citation_index"]
+            #         _emit(f"- Sitat {cit_i}:", event="systeminfo")
+            #         for cp in cit["problems"]:
+            #             _emit(f"  - {cp}", event="systeminfo")
+            #     state["subquery"].response_validity = "not valid"
+            
+            
+            
+            
+            # ---------------------------------------
+            # mykere validering: vis sitat-problemer, men forkast ikke hele svaret – vurder andelen gyldige claims
+            #
             if any_cit_problem:
                 _emit("**Detaljer per sitat:**", event="systeminfo")
                 for cit in citations_report:
@@ -930,7 +981,25 @@ def query_grounded(state: WorkerState) -> Dict[str, Any]:
                     _emit(f"- Sitat {cit_i}:", event="systeminfo")
                     for cp in cit["problems"]:
                         _emit(f"  - {cp}", event="systeminfo")
-                state["subquery"].response_validity = "not valid"
+
+                # Ikke forkast hele svaret – vurder andelen gyldige claims
+                valid_claims = sum(1 for c in claims_report if c["any_citation_valid"])
+                total_claims = len(claims_report)
+
+                if total_claims == 0 or valid_claims == 0:
+                    # Ingen claims kunne støttes i det hele tatt
+                    state["subquery"].response_validity = "not valid"
+                elif valid_claims / total_claims < 0.5:
+                    # Færre enn halvparten av claims er støttet
+                    state["subquery"].response_validity = "not valid"
+                else:
+                    # Majoriteten er støttet – behold svaret
+                    state["subquery"].response_validity = "valid"
+                    _emit(
+                        f"⚠️ {total_claims - valid_claims} av {total_claims} claims mangler sitat, "
+                        f"men {valid_claims}/{total_claims} er gyldige – svaret beholdes.",
+                        event="systeminfo"
+                    )
 
             _emit("\u00A0\n", event="systeminfo")
             _emit(" --- ", event="systeminfo")
@@ -986,37 +1055,36 @@ def synthesizer(state: State_Answer) -> Dict[str, Any]:
         if completed_report_answers:
             logging.info("Aggregating these answers: %s", completed_report_answers)
 
-            aggregated_answer = llm.invoke(
-                [
-                    SystemMessage(
-                        content=(
-                            "Du er en vennlig, empatisk og kunnskapsrik helseveileder laget for å hjelpe ungdom i Norge (alder 13–19 år).\n\n"
-                            "Din oppgave er å sette sammen et enkelt, helhetlig og sammenhengende svar på norsk (bokmål) "
-                            "**kun basert på den gitte listen med del-svar**.\n"
-                            "Du skal **ikke finne på eller legge til ny informasjon, påstander, forklaringer "
-                            "eller råd** som ikke uttrykkelig finnes i den gitte teksten.\n"
-                            "Hvis noe mangler, er uklart eller motsier seg selv, skal du bare utelate det.\n\n"
-                            "Målet ditt:\n"
-                            "- Slå sammen overlappende eller gjentatte poenger fra de gitte del-svarene til et ryddig og lettlest sammendrag.\n"
-                            "- Behold innhold og tone slik de er skrevet.\n"
-                            "- Ikke legg til nye påstander, tolkninger eller veiledning.\n\n"
-                            "Tone og stil:\n"
-                            "- Rolig, vennlig og støttende, men ikke legg til ny empati som ikke står der fra før.\n"
-                            "- Klart språk, korte setninger, ungdomsvennlig.\n"
-                            "- Unngå faguttrykk hvis de ikke allerede står i teksten.\n\n"
-                            "Formatering:\n"
-                            "- Bruk korte overskrifter når det hjelper på lesbarheten.\n"
-                            "- Ikke referer eksplisitt til kilder eller 'del-svar'.\n"
-                            "- Ikke fyll på med fraser som 'Her er...' eller 'Nedenfor finner du...'.\n\n"
-                            "Hvis del-svarene ikke inneholder brukbar informasjon, skal du svare:\n"
-                            "\"Det vet jeg ikke basert på kildene.\""
-                        )
-                    ),
-                    HumanMessage(
-                        content=f"Here is the list of answers: {completed_report_answers}"
-                    ),
-                ]
-            )
+            messages = [
+                SystemMessage(content=(
+                    "Du er en vennlig, empatisk og kunnskapsrik helseveileder laget for å hjelpe ungdom i Norge (alder 13–19 år).\n\n"
+                    "Din oppgave er å sette sammen et enkelt, helhetlig og sammenhengende svar på norsk (bokmål) "
+                    "**kun basert på den gitte listen med del-svar**.\n"
+                    "Du skal **ikke finne på eller legge til ny informasjon, påstander, forklaringer "
+                    "eller råd** som ikke uttrykkelig finnes i den gitte teksten.\n"
+                    "Hvis noe mangler, er uklart eller motsier seg selv, skal du bare utelate det.\n\n"
+                    "Målet ditt:\n"
+                    "- Slå sammen overlappende eller gjentatte poenger fra de gitte del-svarene til et ryddig og lettlest sammendrag.\n"
+                    "- Behold innhold og tone slik de er skrevet.\n"
+                    "- Ikke legg til nye påstander, tolkninger eller veiledning.\n\n"
+                    "Tone og stil:\n"
+                    "- Rolig, vennlig og støttende tone. Du kan formulere overganger naturlig.\n"
+                    "- Vis gjerne at du forstår at temaet kan være vanskelig, uten å legge til ny informasjon.\n"
+                    "- Klart språk, korte setninger, ungdomsvennlig.\n"
+                    "- Unngå faguttrykk hvis de ikke allerede står i teksten.\n\n"
+                    "Formatering:\n"
+                    "- Bruk korte overskrifter når det hjelper på lesbarheten.\n"
+                    "- Ikke referer eksplisitt til kilder eller 'del-svar'.\n"
+                    "- Ikke fyll på med fraser som 'Her er...' eller 'Nedenfor finner du...'.\n\n"
+                    "Hvis del-svarene ikke inneholder brukbar informasjon, skal du svare:\n"
+                    "\"Det vet jeg ikke basert på kildene.\""
+                )),
+                HumanMessage(
+                    content=f"Here is the list of answers: {completed_report_answers}"
+                ),
+            ]
+
+            aggregated_answer, in_tokens, out_tokens = _invoke_with_usage(llm, messages)
 
             ref_list: List[Reference] = []
             for s in sq:
@@ -1032,14 +1100,18 @@ def synthesizer(state: State_Answer) -> Dict[str, Any]:
                     break
 
             return {
+                "validate_response_result": "Accepted",
                 "final_answer": aggregated_answer.content + completed_report_answers_non_valid,
                 "final_short_answer": final_short,
                 "references": top5,
+                "input_tokens": in_tokens,     
+                "output_tokens": out_tokens,   
             }
 
         # Ingen gyldige del-svar
         placeholder = _pick_cannot_answer_placeholder(state.get("query_severity", "Green"))
         return {
+            "validate_response_result":"Rejected",
             "final_answer": placeholder,
             "final_short_answer": placeholder, 
             "references": [],
@@ -1054,6 +1126,43 @@ def synthesizer(state: State_Answer) -> Dict[str, Any]:
             "references": [],
         }
 
+def empathy_rewrite(state: State_Answer) -> Dict[str, Any]:
+    """Postprosesser det endelige svaret for å gi det en varmere, mer empatisk tone."""
+
+    _emit("Rewriting answer with empathy", event="info")
+    
+    # Bypass if response was rejected (placeholder answer, no valid sources)
+    #
+    if state.get("validate_response_result") == "Rejected":
+        _emit("Skipping empathy rewrite: response was Rejected", event="info")
+        return {}
+
+    llm = state["llm"]
+    answer = state.get("final_answer", "")
+    severity = state.get("query_severity", "Green")
+
+    # Ikke omskriv placeholder-svar
+    if not answer or len(answer) < 50:
+        return {}
+
+    try:
+        prompt_value = EMPATHY_REWRITE_PROMPT.format(
+            answer=answer,
+            severity=severity,   # <-- også fiks denne buggen: var hardkodet til "Red"
+        )
+
+        rewritten, in_tokens, out_tokens = _invoke_with_usage(llm, prompt_value)
+        
+        print(f"Rewritten answer: fra:<{answer}> +ntil--->\n<{rewritten.content}>")
+        return {
+            "final_answer": rewritten.content,
+            "input_tokens": in_tokens,      
+            "output_tokens": out_tokens,    
+        }
+
+    except Exception as e:
+        logging.error("empathy_rewrite failed: %s", e)
+        return {}  # behold originalt svar ved feil
 
 def emit_query_answer_references(state: State_Answer) -> Dict[str, Any]:
     """Emitter endelig svar + referanser som events."""
@@ -1145,6 +1254,8 @@ def assign_workers(state: State_Answer) -> List[Send]:
                 "similarity_cutoff": state["similarity_cutoff"],
                 "llm": state["llm"],
                 "retriever": state["retriever"],
+                "conversation_str": state.get("conversation_str", ""),
+                "query_severity": state.get("query_severity", "Green"),
             },
         )
         for s in state["subqueries"]
@@ -1511,6 +1622,7 @@ builder.add_node("query_grounded", query_grounded)
 builder.add_node("synthesizer", synthesizer, join=True)
 builder.add_node("emit_query_answer_references", emit_query_answer_references)
 builder.add_node("related_queries_dialog_from_query", related_queries_dialog_from_query)
+builder.add_node("empathy_rewrite", empathy_rewrite)
 
 # Start → analyse
 builder.add_edge(START, "analyze_query")
@@ -1525,10 +1637,12 @@ builder.add_conditional_edges(
 # Hvis multi: bruk eksisterende flyt
 builder.add_conditional_edges("orchestrator", assign_workers, ["query_grounded"])
 builder.add_edge("query_grounded", "synthesizer")
-builder.add_edge("synthesizer", "emit_query_answer_references")
+builder.add_edge("synthesizer", "empathy_rewrite")
+builder.add_edge("empathy_rewrite", "emit_query_answer_references")
 
 # Hvis fasttrack: gå rett til emitter
-builder.add_edge("fast_single", "emit_query_answer_references")
+builder.add_edge("fast_single", "empathy_rewrite")
+builder.add_edge("empathy_rewrite", "emit_query_answer_references")
 
 # Videre er likt for begge ruter
 builder.add_edge("emit_query_answer_references", "related_queries_dialog_from_query")

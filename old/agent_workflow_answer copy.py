@@ -34,9 +34,6 @@ from langchain_core.runnables import RunnableLambda
 from registry import classify_and_subqueries_prompt, GROUNDED_PROMPT
 
 
-
-
-
 class Reference(TypedDict):
     name: str
     url: str
