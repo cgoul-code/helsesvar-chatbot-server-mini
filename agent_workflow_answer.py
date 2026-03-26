@@ -8,7 +8,6 @@ import heapq
 import random
 
 
-
 from operator import add
 from typing import Any, Dict, List, Literal, Optional, Tuple, Annotated
 
