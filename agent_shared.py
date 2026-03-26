@@ -127,4 +127,4 @@ def _normalize(
     s = s.translate(_CONTROL_CHARS)
     if collapse_ws:
         s = _WS.sub(" ", s)
-s
+    return s if case_sensitive else s.casefold()
