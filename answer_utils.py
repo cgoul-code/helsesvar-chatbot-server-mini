@@ -17,6 +17,38 @@ from llama_index.core.schema import NodeWithScore
 from llama_index.core.postprocessor import SimilarityPostprocessor
 
 
+# Fixed fallback used when no index named "{vectorIndex}_qa_bank" exists.
+# The QA-bank is only used for the related-queries suggestions feature; it is
+# not load-bearing for answer retrieval. So we can decouple it from the
+# answer-retrieval index name (e.g. "hvaerinnafor_unified") and reuse the
+# original question bank for follow-up suggestions regardless.
+QA_BANK_FALLBACK_NAME = "hvaerinnafor_qa_bank"
+
+
+def _resolve_qa_bank_entry(query_settings, vector_store):
+    """Pick which loaded index to use as the QA-bank.
+
+    Tries `{vectorIndex}_qa_bank` first (legacy convention). Falls back to
+    QA_BANK_FALLBACK_NAME so the answer-retrieval index can be swapped
+    independently. Returns (resolved_name, entry_or_None).
+    """
+    name = f"{query_settings.vectorIndex}_qa_bank"
+    entry = vector_store.get(name)
+    if entry is not None:
+        return name, entry
+
+    if QA_BANK_FALLBACK_NAME != name:
+        fallback = vector_store.get(QA_BANK_FALLBACK_NAME)
+        if fallback is not None:
+            logging.warning(
+                "QA-bank %s not found; using %s as fallback for related-queries.",
+                name, QA_BANK_FALLBACK_NAME,
+            )
+            return QA_BANK_FALLBACK_NAME, fallback
+
+    return name, None
+
+
 categories = [
   {
     "name": "Eksen",
@@ -178,12 +210,9 @@ async def get_answer_as_stream(
     logging.info("Found entry: %s", vector_index_description)
     
     # 1.1 Load the qa_bank corresponding to the index
-    vec_name_qa_bank = f'{query_settings.vectorIndex}_qa_bank'
-    entry_qa_bank = vector_store.get(vec_name_qa_bank)
+    vec_name_qa_bank, entry_qa_bank = _resolve_qa_bank_entry(query_settings, vector_store)
     if entry_qa_bank is None:
-        # Log with %s formatting
-        logging.error("Index not found: %s", vec_name_qa_bank)
-        # Raise so the route handler can catch & return 404 JSON
+        logging.error("Index not found: %s (and no fallback)", vec_name_qa_bank)
         raise CustomError(
             f"Index not found, referansefilene for {vec_name_qa_bank} mangler!",
             404
@@ -285,6 +314,23 @@ async def get_answer_as_stream(
         similarity_cutoff=query_settings.similarity_cutoff,
         filters=severity_filters,
     )
+
+    # Tier-1 retrieval: real Q&A from ung.no (psa_ssa_topics).
+    # Loaded if available; the cascade in query_grounded skips it if missing
+    # or if the user is querying psa_ssa_topics directly.
+    index_psa_ssa = None
+    retriever_psa_ssa = None
+    if query_settings.vectorIndex != "psa_ssa_topics":
+        entry_psa_ssa = vector_store.get("psa_ssa_topics")
+        if entry_psa_ssa is not None:
+            index_psa_ssa = entry_psa_ssa.index
+            retriever_psa_ssa = index_psa_ssa.as_retriever(
+                similarity_top_k=5,
+                # No similarity_cutoff here — we apply psa_ssa_threshold ourselves
+                # in the cascade so we can decide based on the top score.
+            )
+        else:
+            logging.info("psa_ssa_topics index not loaded; tier-1 cascade disabled")
          
     response_related_queries_synthesizer = get_response_synthesizer(
         response_mode= "tree_summarize",
@@ -320,12 +366,15 @@ async def get_answer_as_stream(
         "conversation_str": conversation_str,
         "index_related_queries" :index_qa_bank,
         "retriever_related_queries" : retriever_related_queries,
-        
+        "index_psa_ssa": index_psa_ssa,
+        "retriever_psa_ssa": retriever_psa_ssa,
+
         "from_node_id": query_settings.from_node_id,
         "similarity_cutoff": query_settings.similarity_cutoff,
         "similarity_top_k": query_settings.similarity_top_k,
         "relevancy_cutoff" : query_settings.relevancy_cutoff,
-        
+        "psa_ssa_threshold": query_settings.psa_ssa_threshold,
+
         # defaults:
         "relevancy_band": "",
         "best_node_score": 0.0,
@@ -392,13 +441,9 @@ async def get_related_qa_as_stream(
     index: VectorStoreIndex = entry.index
 
     # 1) Load the qa_bank corresponding to the index
-    
-    vec_name_qa_bank = f'{query_settings.vectorIndex}_qa_bank'
-    entry_qa_bank = vector_store.get(vec_name_qa_bank)
+    vec_name_qa_bank, entry_qa_bank = _resolve_qa_bank_entry(query_settings, vector_store)
     if entry_qa_bank is None:
-        # Log with %s formatting
-        logging.error("Index not found: %s", vec_name_qa_bank)
-        # Raise so the route handler can catch & return 404 JSON
+        logging.error("Index not found: %s (and no fallback)", vec_name_qa_bank)
         raise CustomError(
             f"Index not found, referansefilene for {vec_name_qa_bank} mangler!",
             404
@@ -618,10 +663,9 @@ async def get_examples_full_as_stream(
     logging.info("------------->>get_examples_full_as_stream")
 
     try:
-        vec_name_qa_bank = f"{query_settings.vectorIndex}_qa_bank"
-        entry_qa_bank = vector_store.get(vec_name_qa_bank)
+        vec_name_qa_bank, entry_qa_bank = _resolve_qa_bank_entry(query_settings, vector_store)
         if entry_qa_bank is None:
-            logging.error("Index not found: %s", vec_name_qa_bank)
+            logging.error("Index not found: %s (and no fallback)", vec_name_qa_bank)
             raise CustomError(
                 f"Index not found, referansefilene for {vec_name_qa_bank} mangler!",
                 404

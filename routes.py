@@ -39,6 +39,24 @@ def register_routes(app):
             },
         )
 
+    def _not_ready_response(status: str) -> Response:
+        """503 response the browser can actually read (explicit CORS + JSON)."""
+        body = {
+            "error": "server_not_ready",
+            "ready": False,
+            "status": status,
+            "message": "Serveren laster fortsatt indekser. Prøv igjen om noen sekunder.",
+        }
+        return Response(
+            json.dumps(body, ensure_ascii=False),
+            status=503,
+            headers={
+                "Content-Type": "application/json; charset=utf-8",
+                "Access-Control-Allow-Origin": "*",
+                "Retry-After": "5",
+            },
+        )
+
     def _is_duplicate_last(history: List[Dict[str, str]], msg: Dict[str, str]) -> bool:
         """Return True hvis msg er identisk med siste element i history."""
         if not history:
@@ -146,10 +164,45 @@ def register_routes(app):
         SESSION_STORE[session_id] = history
         return history
     
+    @app.route("/healthz", methods=["GET", "OPTIONS"])
+    async def healthz():
+        """Lightweight readiness probe for clients to poll before calling /chat or /examples.
+
+        Always returns 200 — the body's `ready` flag tells the client whether the
+        backend has finished loading indexes. (Returning 200 here keeps the polling
+        loop simple; the chat/examples endpoints still return 503 for safety.)
+        """
+        if request.method == "OPTIONS":
+            return _cors_preflight()
+
+        status, indexes_loaded = server_settings.get_status()
+        body = {
+            "ready": bool(indexes_loaded),
+            "status": status,
+        }
+        if not indexes_loaded:
+            body["message"] = "Serveren laster fortsatt indekser. Prøv igjen om noen sekunder."
+
+        return Response(
+            json.dumps(body, ensure_ascii=False),
+            status=200,
+            headers={
+                "Content-Type": "application/json; charset=utf-8",
+                "Access-Control-Allow-Origin": "*",
+                "Cache-Control": "no-store",
+            },
+        )
+
     @app.route("/examples", methods=["POST", "OPTIONS"])
     async def examples():
         if request.method == "OPTIONS":
             return _cors_preflight()
+
+        # Index readiness
+        status, indexes_loaded = server_settings.get_status()
+        if not indexes_loaded:
+            logging.warning("Indexes are still loading (status=%s)", status)
+            return _not_ready_response(status)
 
         try:
             payload = await request.get_json()
@@ -202,9 +255,8 @@ def register_routes(app):
         # Index readiness
         status, indexes_loaded = server_settings.get_status()
         if not indexes_loaded:
-            logging.warning("Indexes are still loading...")
-            logging.info("Server status: %s", status)
-            return {"error": "Indexes are still loading, please try again later."}, 503
+            logging.warning("Indexes are still loading (status=%s)", status)
+            return _not_ready_response(status)
 
         try:
             payload = await request.get_json()

@@ -9,6 +9,7 @@ class QuerySettings:
         self.similarity_top_k = int(kwargs.get('similarity_top_k', 10))  # Default to int, not str
         self.similarity_cutoff = float(kwargs.get('similarity_cutoff', 0.45))  # Default to float
         self.relevancy_cutoff = float(kwargs.get('relevancy_cutoff', 0.45))  # Default to float
+        self.psa_ssa_threshold = float(kwargs.get('psa_ssa_threshold', 0.65))    # cutoff for psa_ssa_topics tier-1 route; <=0 disables
         self.vectorIndex = kwargs.get('vectorIndex', "None")
         self.user_content = kwargs.get('user_content', "")
         
@@ -35,7 +36,8 @@ def get_query_settings(json_request):
         similarity_top_k=json_request.get('similarity_top_k', 10),
         similarity_cutoff=json_request.get('similarity_cutoff', 0.45),
         relevancy_cutoff=json_request.get('relevancy_cutoff', 0.45),
-        vectorIndex=json_request.get('vectorIndex', "helsenorgeartikler"),
+        psa_ssa_threshold=json_request.get('psa_ssa_threshold', 0.65),
+        vectorIndex=json_request.get('vectorIndex', "hvaerinnafor"),
         agent = json_request.get('agent', "structured"),
         related_only = json_request.get('related_only', False),  
         main_category = json_request.get('main_category', ""),  

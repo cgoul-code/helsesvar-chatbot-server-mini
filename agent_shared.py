@@ -56,7 +56,7 @@ def _node_text(n: Any) -> str:
 
     get_content = getattr(n, "get_content", None)
     if callable(get_content):
-        return get_content(metadata_mode="all") or ""
+        return get_content(metadata_mode="llm") or ""
 
     return getattr(n, "get_text", lambda: "")() or ""
 

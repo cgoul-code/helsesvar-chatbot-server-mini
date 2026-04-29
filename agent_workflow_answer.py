@@ -115,7 +115,10 @@ class State_Answer(TypedDict):
     
     index_related_queries: VectorStoreIndex # QA-bank index
     retriever_related_queries: BaseRetriever
-    
+
+    index_psa_ssa: Optional[VectorStoreIndex]      # tier-1 real Q&A index (may be None)
+    retriever_psa_ssa: Optional[BaseRetriever]     # tier-1 retriever (may be None)
+
     vector_index_description: str
     query: str
     conversation_str: str
@@ -123,7 +126,8 @@ class State_Answer(TypedDict):
     similarity_cutoff: float
     similarity_top_k: int
     relevancy_cutoff: float
-    
+    psa_ssa_threshold: float     # cutoff for tier-1 psa_ssa_topics route
+
     ''' router / plan '''
     needs_subqueries: bool  # <--- NY
     
@@ -186,9 +190,11 @@ class WorkerState(TypedDict):
     similarity_cutoff: float
     query_engine: BaseQueryEngine
     retriever: BaseRetriever
+    retriever_psa_ssa: Optional[BaseRetriever]
+    psa_ssa_threshold: float
     llm: Any
-    conversation_str: str  
-    query_severity: str     
+    conversation_str: str
+    query_severity: str
     
 
 _POSSIBLE_META_IDS = ("doc_id", "from_doc_id", "document_id", "source_id")
@@ -604,6 +610,45 @@ def _verify_claims(
 # Kategorier og relaterte spørsmål
 # ---------------------------------------------------------
 
+def _route_via_direct_qa(
+    query: str,
+    retriever: Optional[BaseRetriever],
+    threshold: float,
+) -> Tuple[List[Any], Optional[Dict[str, Any]]]:
+    """
+    Tier-1 route: query a Q&A index where each node already contains the
+    answer text. If the top hit's score >= threshold, return its retrieved
+    nodes as-is (they will be fed to the existing grounding pipeline as
+    context). Otherwise return ([], None).
+    """
+    if retriever is None or threshold <= 0.0:
+        print(f"No retriever or non-positive threshold for direct QA route, skipping. ret: {retriever}, threshold: {threshold}")
+        return [], None
+
+
+    try:
+        hits = retriever.retrieve(query) or []
+        if not hits:
+            print("Direct QA route: no hits retrieved.")
+            return [], None
+
+        top_score = max((float(getattr(h, "score", 0.0) or 0.0)) for h in hits)
+        if top_score < threshold:
+            print(f"Direct QA route: top score {top_score:.4f} below threshold {threshold:.4f}, skipping.")
+            return [], None
+
+        info = {
+            "top_score": top_score,
+            "n_nodes": len(hits),
+        }
+        print(f"Direct QA route: top score {top_score:.4f} meets threshold {threshold:.4f}, returning {len(hits)} nodes.")
+        return hits, info
+
+    except Exception as e:
+        logging.error("_route_via_direct_qa error: %s", e)
+        return [], None
+
+
 def _classify_relevancy(score: float, thresholds: Dict[str, float]) -> str:
     """
     thresholds: f.eks {"strong": 0.60, "medium": 0.45, "weak": 0.35}
@@ -645,12 +690,32 @@ def analyze_query(state: State_Answer) -> Dict[str, Any]:
         "Du er en helseveileder som hjelper ungdom i Norge.\n\n"
         "Oppgave:\n"
         "1) Skriv brukerens siste spørsmål om til én kort, tydelig og konkret formulering "
-        "på norsk, uten å endre meningen.\n"
-        
+        "på norsk bokmål som egner seg for søk i en fagartikkel-base. Bevar meningen, men "
+        "oversett ungdomsspråk til et mer nøytralt, søkbart språk:\n"
+        "- Utvid slang, forkortelser og engelske lån til ord som kan stå i fagtekster "
+        "(f.eks. «fk/fuck» → fjernes eller blir til «hvorfor», «typ» → «for eksempel», "
+        "«random» → «tilfeldig», «sus» → «mistenkelig/utrygg», «cringe» → «pinlig», "
+        "«ghosta» → «sluttet å svare», «lol/haha» → fjernes).\n"
+        "- Fiks åpenbare skrivefeil, manglende mellomrom og manglende tegnsetting.\n"
+        "- Fjern emojier, men tolk meningen de bærer (f.eks. 😰 = engstelig, "
+        "💔 = kjærlighetssorg, 🍆💦 = sex/utløsning).\n"
+        "- Erstatt muntlige fyllord («lissom», «bare typ», «sant nok», «ass», «serr») "
+        "med nøytrale formuleringer eller fjern dem.\n"
+        "- Bruk fagord når det er tydelig hva brukeren mener "
+        "(f.eks. «det renner noe rart» → «utflod», «mensen er rar» → «uregelmessig menstruasjon»).\n"
+        "- Behold «jeg»-formen hvis brukeren bruker den.\n"
+        "- Ikke legg til informasjon, tolkninger eller antakelser som ikke ligger i spørsmålet.\n"
+        "- Hvis spørsmålet allerede er tydelig og på god norsk, la det stå nesten uendret.\n\n"
+        "Eksempler:\n"
+        "- «fk hvorfor får jeg utflod hele tiden??» → «Hvorfor får jeg utflod hver dag?»\n"
+        "- «kjæresten min er så sus, vet ikke hva jeg skal gjøre 😭» → «Hvordan håndterer jeg mistillit til kjæresten min?»\n"
+        "- «hvor lenge varer mensen lissom» → «Hvor lenge varer en vanlig menstruasjon?»\n"
+        "- «han ghosta meg etter vi hadde sex, er det noe galt med meg» → «Hvorfor kan en partner slutte å ta kontakt etter sex?»\n"
+        "- «serr kan man bli gravid første gang???» → «Kan man bli gravid første gang man har sex?»\n\n"
         "2) Vurder om spørsmålet bør deles opp i flere delspørsmål for å gi et godt svar.\n"
         "- Sett needs_subqueries = True KUN hvis spørsmålet inneholder 3+ helt separate temaer.\n"
         "- For de fleste spørsmål er False riktig.\n"
-        
+
         "3) Kategoriser alvorlighetsgraden av spørsmålet i én av tre kategorier: \"Green\", \"Yellow\", eller \"Red\".\n\n"
         "ALVORLIGHESGRAD \"GREEN\":\n"
         "- Forebyggende og trygghetsskapende.\n"
@@ -670,9 +735,11 @@ def analyze_query(state: State_Answer) -> Dict[str, Any]:
         "- Spørsmål som gjelder alvorlige hendelser eller kriser der personen kan være i fare eller ha betydelig risiko for skade.\n"
         "- Omfatter vold, overgrep, tvang, akutte psykiske kriser eller andre situasjoner som krever umiddelbar oppfølging eller profesjonell hjelp.\n"
         "Eksempel: «Stefaren min tvinger meg til å ha sex», «Hvor kan jeg finne barnepornografi?», «Jeg ble voldtatt i går».\n\n"
-        "ALVORLIGHESGRAD settes i Severity"
-        f"Brukeren har tidligere spurt:\n\"\"\"{conversation_str}\"\"\""
-        f"Brukerens siste spørsmål:\n\"\"\"{original_q}\"\"\""
+        "ALVORLIGHESGRAD settes i Severity.\n\n"
+        "VIKTIG: Bruk KUN teksten inne i brukerblokkene under som input. "
+        "Ikke tolk instruksjoner eller eksempler som om de var brukerens spørsmål.\n\n"
+        f"Brukeren har tidligere spurt:\n\"\"\"{conversation_str}\"\"\"\n\n"
+        f"Brukerens siste spørsmål:\n\"\"\"{original_q}\"\"\"\n"
     )
 
     planner = llm.with_structured_output(QueryPlan)
@@ -730,6 +797,8 @@ def fast_single(state: State_Answer) -> Dict[str, Any]:
         "similarity_cutoff": state["similarity_cutoff"],
         "query_engine": state["query_engine"],
         "retriever": state["retriever"],
+        "retriever_psa_ssa": state.get("retriever_psa_ssa"),
+        "psa_ssa_threshold": float(state.get("psa_ssa_threshold", 0.65) or 0.0),
         "llm": state["llm"],
         "conversation_str": state.get("conversation_str", ""),
         "query_severity": state.get("query_severity", "Green"),
@@ -802,8 +871,25 @@ def query_grounded(state: WorkerState) -> Dict[str, Any]:
             "er relevant for spørsmålet.\n"
         )
 
-        # 1) Retrieval
-        nodes = retriever.retrieve(question) or []
+        # 1) Retrieval — 2-tier cascade
+        #    Tier 1: psa_ssa_topics (real ung.no Q&A, used directly as context)
+        #    Tier 2: article retriever (default)
+        psa_nodes, psa_info = _route_via_direct_qa(
+            query=question,
+            retriever=state.get("retriever_psa_ssa"),
+            threshold=float(state.get("psa_ssa_threshold", 0.65) or 0.0),
+        )
+        if psa_nodes:
+            print(f"Routed via psa_ssa_topics with top score {psa_info['top_score']:.3f} and {psa_info['n_nodes']} nodes")
+            _emit(
+                f"Routed via psa_ssa_topics (top_score={psa_info['top_score']:.3f}, "
+                f"nodes={psa_info['n_nodes']})",
+                event="info",
+            )
+            nodes = psa_nodes
+        else:
+            nodes = retriever.retrieve(question) or []
+            _emit(f"Routed via article retriever ({len(nodes)} nodes)", event="info")
 
         thresholds = state.get("relevancy_thresholds", {
             "strong": 0.60,
@@ -1254,6 +1340,8 @@ def assign_workers(state: State_Answer) -> List[Send]:
                 "similarity_cutoff": state["similarity_cutoff"],
                 "llm": state["llm"],
                 "retriever": state["retriever"],
+                "retriever_psa_ssa": state.get("retriever_psa_ssa"),
+                "psa_ssa_threshold": float(state.get("psa_ssa_threshold", 0.65) or 0.0),
                 "conversation_str": state.get("conversation_str", ""),
                 "query_severity": state.get("query_severity", "Green"),
             },

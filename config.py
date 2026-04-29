@@ -117,8 +117,11 @@ vector_store = VectorIndexStore()
 
 VECTOR_INDEX_MAP = [
     {"name": "hvaerinnafor", "storage": ("." if RunningLocally() else "") +"/blobstorage/chatbot/hvaerinnafor", "description":"Forelskelse"},
-    {"name": "hvaerinnafor_qa_bank", "storage": ("." if RunningLocally() else "") +"/blobstorage/chatbot/hvaerinnafor_qa_bank", "description":"Relaterte spørsmål"}
+    {"name": "hvaerinnafor_qa_bank", "storage": ("." if RunningLocally() else "") +"/blobstorage/chatbot/hvaerinnafor_qa_bank", "description":"Relaterte spørsmål"},
+    {"name": "psa_ssa_topics", "storage": ("." if RunningLocally() else "") +"/blobstorage/chatbot/psa_ssa_topics", "description":"spørsmål og svar fra ung.no om psa_ssa relaterte temaer"},
+    {"name": "hvaerinnafor_unified", "storage": ("." if RunningLocally() else "") +"/blobstorage/chatbot/hvaerinnafor_unified", "description":"hvaerinnafor_unified is a single vector index that merges two content types: article chunks from the hvaerinnafor knowledge base, and ~7900 real Q&A entries from ung.no (last 12 months). Every node — regardless of source — exposes an answer-text field that the LLM sees, plus an embedding-only aliases field of question phrasings that shapes retrieval without leaking into the LLM prompt. For articles, aliases are 10 LLM-generated synthetic questions per chunk; for Q&A nodes, the original user question. At build time, real ung.no questions are additionally cross-pollinated onto the article chunks they best match (top-3, similarity ≥ 0.55, score-ranked). At query time, articles and Q&A compete in the same retrieval call — a chunk wins whether the user's wording resembles its raw text, a question its author imagined, or a question someone has actually asked."}
 ]
+
 
 # ChatGPT 5-mini
 #
