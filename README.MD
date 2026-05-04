@@ -11,6 +11,7 @@ feelings, and sexual health aimed at Norwegian youth aged 13–19.
 - [Overview](#overview)
 - [Architecture](#architecture)
 - [Agent workflow](#agent-workflow)
+- [Retrieval modes](#retrieval-modes)
 - [Project structure](#project-structure)
 - [Prerequisites](#prerequisites)
 - [Configuration](#configuration)
@@ -83,8 +84,13 @@ Quart HTTP server  (app.py / routes.py)
 
 | Index name | Content |
 |---|---|
-| `hvaerinnafor` | Source articles — the factual knowledge base |
-| `hvaerinnafor_qa_bank` | Pre-written Q&A pairs used for related questions and fast answers |
+| `hvaerinnafor` | Source articles — the factual knowledge base (legacy / hybrid mode) |
+| `hvaerinnafor_qa_bank` | Pre-written Q&A pairs used for related-questions suggestions and the fast follow-up path |
+| `psa_ssa_topics` | ~7 900 real Q&A entries from ung.no (last 12 months). Optional tier-1 short-circuit when loaded |
+| `hvaerinnafor_unified` | Single index merging article chunks **and** ung.no Q&A nodes into one retrieval pool (unified mode) |
+
+The indexes loaded at startup determine which **retrieval mode** is active — see
+[Retrieval modes](#retrieval-modes) below.
 
 ---
 
@@ -124,6 +130,83 @@ of its claims have at least one verified citation.
 
 Severity affects which related questions are shown, the empathy rewrite
 intensity, and which fallback placeholder is used when no answer is found.
+
+---
+
+## Retrieval modes
+
+The `query_grounded` worker supports three retrieval modes. **There is no `mode`
+flag** — the active mode is determined by which `vectorIndex` the client picks
+and which indexes the server has loaded at startup.
+
+| Mode | `vectorIndex` | Sources used for grounding |
+|---|---|---|
+| **Legacy** | `hvaerinnafor` | Article chunks only |
+| **Hybrid** | `hvaerinnafor` *(with `psa_ssa_topics` also loaded)* | Tier-1 ung.no Q&A short-circuit, falling back to article chunks |
+| **Unified** | `hvaerinnafor_unified` | Article chunks **and** ung.no Q&A competing in one retrieval call |
+
+### Legacy mode
+
+The original setup. Only the article index is queried for grounding. The
+`hvaerinnafor_qa_bank` index is still loaded but is used purely for the related-
+questions suggestion list and for the fast follow-up path
+(`agent: hvaerinnafor_related_qa`).
+
+### Hybrid mode
+
+Adds a **two-tier cascade** in front of the article retriever
+([agent_workflow_answer.py:874-892](agent_workflow_answer.py#L874-L892)):
+
+```
+question
+   │
+   ▼
+Tier 1: psa_ssa_topics retriever
+   │
+   ├─ top score ≥ psa_ssa_threshold (default 0.65)
+   │     └─► use those Q&A nodes as context, skip articles
+   │
+   └─ otherwise
+         └─► Tier 2: article retriever (hvaerinnafor) — default path
+```
+
+The threshold is tunable per request via `psa_ssa_threshold` in the request body
+(`<= 0` disables the cascade entirely). When the cascade fires, the LLM sees
+the matched ung.no veileder answers as its only context.
+
+### Unified mode
+
+A single index (`hvaerinnafor_unified`) holds two physically distinct kinds of
+nodes that compete in the same retrieval call:
+
+- **Article chunks** — `answer-text` = article prose, `aliases` = 10 LLM-
+  generated synthetic questions per chunk **plus up to 3 cross-pollinated real
+  ung.no questions** (top-3 matches with similarity ≥ 0.55).
+- **Q&A nodes** — `answer-text` = the original ung.no veileder's answer,
+  `aliases` = the original user question.
+
+The `aliases` field is **embedding-only**: it shapes which node gets retrieved
+but never enters the LLM prompt. The LLM only ever sees the winning nodes'
+`answer-text`.
+
+**Cross-pollination** is a retrieval-steering trick at build time. By grafting
+real user questions onto the article chunks they best match, articles become
+competitive when the user phrases their query the way a real ung.no user did —
+even if the article's own prose doesn't sound like a question. It does **not**
+merge the two node types; it just makes article chunks "speak user."
+
+At query time the top-K can return all-article, all-Q&A, or a mix — whichever
+embeddings rank highest. The `psa_ssa_topics` tier-1 cascade still runs as an
+independent short-circuit if the index is loaded, ahead of the unified
+retrieval.
+
+### Choosing a mode
+
+| If you want… | Use |
+|---|---|
+| Pure article-grounded answers, no ung.no Q&A influence | Legacy |
+| Article answers + a fast path when an ung.no Q&A is a near-exact match | Hybrid |
+| Article and Q&A nodes ranked together by embedding similarity | Unified |
 
 ---
 
@@ -220,16 +303,22 @@ Streams an answer to a user question.
 ```json
 {
   "agent": "hvaerinnafor",
-  "vectorIndex": "hvaerinnafor",
+  "vectorIndex": "hvaerinnafor_unified",
   "query": "Hva er egentlig forelskelse?",
   "session_id": "abc123",
   "messages": [
     { "role": "user", "content": "Hva er egentlig forelskelse?" }
   ],
   "similarity_top_k": 10,
-  "similarity_cutoff": 0.45
+  "similarity_cutoff": 0.45,
+  "psa_ssa_threshold": 0.65
 }
 ```
+
+`vectorIndex` selects the [retrieval mode](#retrieval-modes): use
+`hvaerinnafor` for legacy/hybrid, `hvaerinnafor_unified` for unified.
+`psa_ssa_threshold` controls the tier-1 ung.no Q&A short-circuit (`<= 0`
+disables it).
 
 **SSE events emitted:**
 
@@ -316,15 +405,22 @@ professional help resources (e.g. Sex og samfunn).
 
 1. **New articles** — add source documents to the `hvaerinnafor` index using
    the existing ingestion pipeline. Each document needs `title`, `url`, and
-   optionally `icon_url` in its metadata.
+   optionally `icon_url` in its metadata. For unified mode, the same articles
+   must also be re-indexed into `hvaerinnafor_unified` so the synthetic-question
+   aliases and cross-pollination step run on them.
 
 2. **New Q&A pairs** — add entries to the `hvaerinnafor_qa_bank` index. Each
    node needs `answer`, `short_answer`, `severity`, `category`, `valid: 1`,
    and `from_doc_id` pointing to the source article.
 
-3. **New categories** — add to the `categories` list in `answer_utils.py`.
+3. **New ung.no Q&A entries** — add to `psa_ssa_topics` (used by the hybrid
+   tier-1 cascade) and re-run the unified-index build so the entries are
+   ingested as Q&A nodes and considered for cross-pollination onto article
+   chunks.
 
-4. **New topics** — update the severity classification prompt in
+4. **New categories** — add to the `categories` list in `answer_utils.py`.
+
+5. **New topics** — update the severity classification prompt in
    `analyze_query` (`agent_workflow_answer.py`) and the category list in
    `registry.py` (`REFINE_AND_CLASSIFY` prompt).
 
