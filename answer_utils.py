@@ -28,10 +28,24 @@ QA_BANK_FALLBACK_NAME = "hvaerinnafor_qa_bank"
 def _resolve_qa_bank_entry(query_settings, vector_store):
     """Pick which loaded index to use as the QA-bank.
 
-    Tries `{vectorIndex}_qa_bank` first (legacy convention). Falls back to
-    QA_BANK_FALLBACK_NAME so the answer-retrieval index can be swapped
-    independently. Returns (resolved_name, entry_or_None).
+    Resolution order:
+      1. If the request supplies `qa_bank_index` and that index is loaded, use it.
+      2. Otherwise try `{vectorIndex}_qa_bank` (legacy convention).
+      3. Otherwise fall back to QA_BANK_FALLBACK_NAME so the answer-retrieval
+         index can be swapped independently.
+
+    Returns (resolved_name, entry_or_None).
     """
+    requested = getattr(query_settings, "qa_bank_index", None)
+    if requested:
+        entry = vector_store.get(requested)
+        if entry is not None:
+            return requested, entry
+        logging.warning(
+            "Requested qa_bank_index %s not loaded; falling back to default resolution.",
+            requested,
+        )
+
     name = f"{query_settings.vectorIndex}_qa_bank"
     entry = vector_store.get(name)
     if entry is not None:

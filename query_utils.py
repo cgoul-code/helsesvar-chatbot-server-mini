@@ -11,6 +11,7 @@ class QuerySettings:
         self.relevancy_cutoff = float(kwargs.get('relevancy_cutoff', 0.45))  # Default to float
         self.psa_ssa_threshold = float(kwargs.get('psa_ssa_threshold', 0.65))    # cutoff for psa_ssa_topics tier-1 route; <=0 disables
         self.vectorIndex = kwargs.get('vectorIndex', "None")
+        self.qa_bank_index = kwargs.get('qa_bank_index', None)  # explicit QA-bank override; None = use fallback chain
         self.user_content = kwargs.get('user_content', "")
         
         self.agent = kwargs.get('agent', "structured")
@@ -38,6 +39,7 @@ def get_query_settings(json_request):
         relevancy_cutoff=json_request.get('relevancy_cutoff', 0.45),
         psa_ssa_threshold=json_request.get('psa_ssa_threshold', 0.65),
         vectorIndex=json_request.get('vectorIndex', "hvaerinnafor"),
+        qa_bank_index=json_request.get('qa_bank_index', None),
         agent = json_request.get('agent', "structured"),
         related_only = json_request.get('related_only', False),  
         main_category = json_request.get('main_category', ""),  

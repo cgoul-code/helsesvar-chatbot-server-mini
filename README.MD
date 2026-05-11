@@ -139,11 +139,15 @@ The `query_grounded` worker supports three retrieval modes. **There is no `mode`
 flag** — the active mode is determined by which `vectorIndex` the client picks
 and which indexes the server has loaded at startup.
 
-| Mode | `vectorIndex` | Sources used for grounding |
-|---|---|---|
-| **Legacy** | `hvaerinnafor` | Article chunks only |
-| **Hybrid** | `hvaerinnafor` *(with `psa_ssa_topics` also loaded)* | Tier-1 ung.no Q&A short-circuit, falling back to article chunks |
-| **Unified** | `hvaerinnafor_unified` | Article chunks **and** ung.no Q&A competing in one retrieval call |
+| Mode (client pill) | `vectorIndex` | `psa_ssa_threshold` | Behavior |
+|---|---|---|---|
+| **Legacy** (`FAQ->Art`) | `hvaerinnafor` | `0.65` | Steg-1 Q&A shortcut on; fallback to article-only index |
+| **Hybrid** (`FAQ->Hyb`) | `hvaerinnafor_unified` | `0.65` | Steg-1 Q&A shortcut on; fallback to unified index |
+| **Unified** (`Hyb`) | `hvaerinnafor_unified` | `0` | No shortcut; every query goes straight to the unified index |
+
+The mapping above mirrors `RETRIEVAL_MODES` in the client
+([HeiChatClient.jsx:78-82](https://github.com/cgoul-code/chatbot-client-HEI20-v2/blob/main/client/src/HeiChatClient.jsx#L78-L82)) — see the
+client README for example queries that exercise each mode.
 
 ### Legacy mode
 
@@ -154,25 +158,26 @@ questions suggestion list and for the fast follow-up path
 
 ### Hybrid mode
 
-Adds a **two-tier cascade** in front of the article retriever
-([agent_workflow_answer.py:874-892](agent_workflow_answer.py#L874-L892)):
+Same Steg-1 cascade as legacy ([agent_workflow_answer.py:874-892](agent_workflow_answer.py#L874-L892)),
+but the fallback uses the **unified** index instead of the article-only index:
 
 ```
 question
    │
    ▼
-Tier 1: psa_ssa_topics retriever
+Steg-1: psa_ssa_topics retriever
    │
-   ├─ top score ≥ psa_ssa_threshold (default 0.65)
-   │     └─► use those Q&A nodes as context, skip articles
+   ├─ top score ≥ psa_ssa_threshold (0.65)
+   │     └─► use those Q&A nodes as context, skip the main index
    │
    └─ otherwise
-         └─► Tier 2: article retriever (hvaerinnafor) — default path
+         └─► Steg-2: hvaerinnafor_unified — articles + Q&A nodes compete
 ```
 
 The threshold is tunable per request via `psa_ssa_threshold` in the request body
-(`<= 0` disables the cascade entirely). When the cascade fires, the LLM sees
-the matched ung.no veileder answers as its only context.
+(`<= 0` disables the cascade entirely — that's how Unified mode is configured).
+When the cascade fires, the LLM sees the matched ung.no veileder answers as its
+only context.
 
 ### Unified mode
 
@@ -196,17 +201,18 @@ even if the article's own prose doesn't sound like a question. It does **not**
 merge the two node types; it just makes article chunks "speak user."
 
 At query time the top-K can return all-article, all-Q&A, or a mix — whichever
-embeddings rank highest. The `psa_ssa_topics` tier-1 cascade still runs as an
-independent short-circuit if the index is loaded, ahead of the unified
-retrieval.
+embeddings rank highest. The Steg-1 `psa_ssa_topics` cascade is **disabled** in
+Unified mode (the client sends `psa_ssa_threshold: 0`), so unified is the
+cleanest A/B signal for what the unified index itself contributes — no
+short-circuit can mask the comparison.
 
 ### Choosing a mode
 
 | If you want… | Use |
 |---|---|
-| Pure article-grounded answers, no ung.no Q&A influence | Legacy |
-| Article answers + a fast path when an ung.no Q&A is a near-exact match | Hybrid |
-| Article and Q&A nodes ranked together by embedding similarity | Unified |
+| A/B baseline — article-only fallback behind the FAQ shortcut | Legacy |
+| FAQ shortcut on, but articles + Q&A compete on misses | Hybrid |
+| No shortcut — pure unified retrieval, articles and Q&A ranked together | Unified |
 
 ---
 
@@ -297,28 +303,65 @@ returns HTTP 503 until indexes are ready.
 
 ### `POST /chat`
 
-Streams an answer to a user question.
+Streams an answer to a user question. The shape below matches what the HEI 2.0
+client actually sends from
+[HeiChatClient.jsx:941-965](https://github.com/cgoul-code/chatbot-client-HEI20-v2/blob/main/client/src/HeiChatClient.jsx#L941-L965)
+— shared fields are identical across modes; only `vectorIndex` and
+`psa_ssa_threshold` change.
 
-**Request body:**
+**Headers:**
+```
+Content-Type: application/json
+Cache-Control: no-cache
+Accept: text/event-stream
+```
+
+**Shared fields (same for every request):**
+
+| Field | Type | Source / typical value |
+|---|---|---|
+| `messages` | array | `[{ role: 'user', content: '<spørsmål>' }]` — current user input |
+| `session_id` | string | uuid v4 generated per page load (`chatId`) |
+| `clientType` | string | `"HEI"` |
+| `agent` | string | `"hvaerinnafor"`, or `"hvaerinnafor_related_qa"` for related-question follow-ups |
+| `similarity_top_k` | string | `"5"` |
+| `similarity_cutoff` | string | `"0.75"` |
+| `stream` | boolean | `true` |
+| `from_related_q` | boolean | `true` if the user clicked a related-question suggestion, else `false` |
+| `from_node_id` | string \| null | source node id when `from_related_q` is `true`, else `null` |
+| **`vectorIndex`** | string | **per [retrieval mode](#retrieval-modes)** |
+| **`psa_ssa_threshold`** | number | **per [retrieval mode](#retrieval-modes)** |
+| `qa_bank_index` | string \| null | *Optional.* Explicit QA-bank index name (used for related-question suggestions and the fast follow-up path). If omitted or the named index isn't loaded, the server tries `{vectorIndex}_qa_bank` then falls back to `hvaerinnafor_qa_bank`. Set this to suppress the "QA-bank … not found" warning when running with a `vectorIndex` that has no matching `_qa_bank` (e.g. `hvaerinnafor_unified` → set `qa_bank_index: "hvaerinnafor_qa_bank"`). |
+
+**Per-mode values:**
+
+| Mode | `vectorIndex` | `psa_ssa_threshold` |
+|---|---|---|
+| Legacy (`FAQ->Art`) | `"hvaerinnafor"` | `0.65` |
+| Hybrid (`FAQ->Hyb`) | `"hvaerinnafor_unified"` | `0.65` |
+| Unified (`Hyb`) | `"hvaerinnafor_unified"` | `0` |
+
+**Example payload — Unified mode:**
 ```json
 {
+  "messages": [{ "role": "user", "content": "Kan jeg slutte på videregående?" }],
+  "session_id": "f7c1e9...",
+  "clientType": "HEI",
   "agent": "hvaerinnafor",
+  "similarity_top_k": "5",
+  "similarity_cutoff": "0.75",
   "vectorIndex": "hvaerinnafor_unified",
-  "query": "Hva er egentlig forelskelse?",
-  "session_id": "abc123",
-  "messages": [
-    { "role": "user", "content": "Hva er egentlig forelskelse?" }
-  ],
-  "similarity_top_k": 10,
-  "similarity_cutoff": 0.45,
-  "psa_ssa_threshold": 0.65
+  "psa_ssa_threshold": 0,
+  "qa_bank_index": "hvaerinnafor_qa_bank",
+  "stream": true,
+  "from_related_q": false,
+  "from_node_id": null
 }
 ```
 
-`vectorIndex` selects the [retrieval mode](#retrieval-modes): use
-`hvaerinnafor` for legacy/hybrid, `hvaerinnafor_unified` for unified.
-`psa_ssa_threshold` controls the tier-1 ung.no Q&A short-circuit (`<= 0`
-disables it).
+Swap `vectorIndex` and `psa_ssa_threshold` to the values from the per-mode
+table above to reproduce Legacy or Hybrid behavior. The client README has full
+worked examples per mode.
 
 **SSE events emitted:**
 
