@@ -34,34 +34,14 @@ from llama_index.core import StorageContext, load_index_from_storage
 from langchain_openai import AzureChatOpenAI
 
 # --- Import your project utilities (these must exist in your environment) ---
-from config import server_settings
+# Reuse the canonical VECTOR_INDEX_MAP from config.py so this script picks up
+# every registered index (hvaerinnafor, hvaerinnafor_qa_bank, psa_ssa_topics,
+# hvaerinnafor_unified) without drift.
+from config import server_settings, ServerSettings, VectorIndexStore, VECTOR_INDEX_MAP
 from answer_utils import get_answer_as_stream
 from query_utils import QuerySettings
-from config import ServerSettings, VectorIndexStore
 
 
-
-
-def RunningLocally():
-    if 'WEBSITE_SITE_NAME' in os.environ or 'FUNCTIONS_WORKER_RUNTIME' in os.environ:
-        return False
-    else:
-        print("Logging info locally")
-        return True
-    
-
-VECTOR_INDEX_MAP = [
-    {
-        "name": "hvaerinnafor",
-        "storage": ("." if RunningLocally() else "") + "/blobstorage/chatbot/hvaerinnafor",
-        "description": "Forelskelse",
-    },
-    {
-        "name": "hvaerinnafor_qa_bank",
-        "storage": ("." if RunningLocally() else "") + "/blobstorage/chatbot/hvaerinnafor_qa_bank",
-        "description": "Relaterte spørsmål",
-    },
-]
 load_dotenv(find_dotenv())
 # module-level store
 vector_store = VectorIndexStore()
@@ -121,8 +101,12 @@ def upsert_answers_excel(
     run_df must contain:
       - 'question'
       - 'expected answer'
-      - '<run_answer_col>'
-    Creates file if missing; otherwise appends new column and updates/appends rows by question.
+      - one or more per-run columns (e.g. 'answer - run date YYYY-MM-DD',
+        'references - run date YYYY-MM-DD').
+    Creates file if missing; otherwise appends the new per-run columns and
+    updates/appends rows by question. When any per-run column collides with an
+    existing column, the SAME HH:MM:SS suffix is applied to every per-run
+    column so they remain paired.
     """
     if not os.path.exists(out_xlsx):
         run_df.to_excel(out_xlsx, index=False)
@@ -133,56 +117,53 @@ def upsert_answers_excel(
     existing = _normalize_existing_columns(existing)
 
     if "question" not in existing.columns:
-        # If existing file is not in expected format, fall back to preserving it as-is by
-        # adding the new sheet-like structure in the same sheet.
-        # (But we still try to behave sensibly.)
         existing["question"] = ""
-
     if "expected answer" not in existing.columns:
         existing["expected answer"] = ""
 
-    # Identify the run's answer column (the one that's not the two base columns)
-    run_answer_cols = [c for c in run_df.columns if c not in ("question", "expected answer")]
-    if len(run_answer_cols) != 1:
-        raise ValueError(f"run_df must have exactly 1 run answer column, found: {run_answer_cols}")
-    run_answer_col = run_answer_cols[0]
+    base_cols = ("question", "expected answer")
+    run_cols = [c for c in run_df.columns if c not in base_cols]
+    if not run_cols:
+        raise ValueError("run_df must contain at least one per-run column besides the base columns.")
 
-    # Ensure we don't overwrite an existing same-name column
-    unique_answer_col = _ensure_unique_answer_col(existing, run_answer_col)
-    if unique_answer_col != run_answer_col:
-        run_df = run_df.rename(columns={run_answer_col: unique_answer_col})
-        run_answer_col = unique_answer_col
+    # If ANY per-run column collides with an existing column, suffix them all
+    # with the same HH:MM:SS so they stay paired in the output.
+    if any(c in existing.columns for c in run_cols):
+        suffix = datetime.now(ZoneInfo("Europe/Oslo")).strftime("%H:%M:%S")
+        rename_map = {c: f"{c} {suffix}" for c in run_cols}
+        run_df = run_df.rename(columns=rename_map)
+        run_cols = list(rename_map.values())
 
-    # Ensure the new column exists on existing
-    if run_answer_col not in existing.columns:
-        existing[run_answer_col] = ""
+    for c in run_cols:
+        if c not in existing.columns:
+            existing[c] = ""
 
     # Index by question for upsert
     existing_idx = existing.set_index("question", drop=False)
     run_idx = run_df.set_index("question", drop=False)
 
-    # Update existing rows / append new ones
     for q, row in run_idx.iterrows():
         if q in existing_idx.index:
-            # Fill expected answer if blank
             if (
                 str(existing_idx.at[q, "expected answer"]).strip() == ""
                 and str(row.get("expected answer", "")).strip() != ""
             ):
                 existing_idx.at[q, "expected answer"] = row.get("expected answer", "")
-
-            existing_idx.at[q, run_answer_col] = row.get(run_answer_col, "")
+            for c in run_cols:
+                existing_idx.at[q, c] = row.get(c, "")
         else:
-            # Append new row with all columns existing currently
             new_row = {col: "" for col in existing_idx.columns}
             new_row["question"] = row.get("question", "")
             new_row["expected answer"] = row.get("expected answer", "")
-            new_row[run_answer_col] = row.get(run_answer_col, "")
-            existing_idx = pd.concat([existing_idx, pd.DataFrame([new_row]).set_index("question", drop=False)])
+            for c in run_cols:
+                new_row[c] = row.get(c, "")
+            existing_idx = pd.concat(
+                [existing_idx, pd.DataFrame([new_row]).set_index("question", drop=False)]
+            )
 
     out_df = existing_idx.reset_index(drop=True)
     out_df.to_excel(out_xlsx, index=False)
-    print(f"Updated Excel (added '{run_answer_col}') and saved to {out_xlsx}")
+    print(f"Updated Excel (added {run_cols}) and saved to {out_xlsx}")
 
 
 def _extract_answer_and_refs(answer_stream_text: str) -> Tuple[str, List[Dict[str, str]]]:
@@ -236,13 +217,15 @@ async def _run_one_question(
     related_only: bool = False,
     main_category: Optional[str] = None,
     query_severity: Optional[str] = None,
+    psa_ssa_threshold: float = 0.65,
+    qa_bank_index: Optional[str] = None,
 ) -> Dict[str, Any]:
     """
     Runs your agent for a single user question and returns a dict with parsed results.
     """
     global vector_store
     global server_settings
-    
+
 
     qs = QuerySettings(
         user_content=question,
@@ -253,11 +236,14 @@ async def _run_one_question(
         related_only=related_only,
         main_category=main_category,
         query_severity=query_severity,
+        psa_ssa_threshold=psa_ssa_threshold,
+        qa_bank_index=qa_bank_index,
     )
     print(qs)
 
     # Collect stream
     answer_buffer: List[str] = []
+    references_lines: List[str] = []
     related_queries_json: Optional[str] = None
     refined_query_text: Optional[str] = None
     maincategory_text: Optional[str] = None
@@ -279,6 +265,8 @@ async def _run_one_question(
 
         if event == "answer" and text_delta:
             answer_buffer.append(text_delta)
+        elif event == "references" and text_delta:
+            references_lines.append(text_delta)
         elif event == "related queries" and text_delta:
             related_queries_json = text_delta  # raw JSON array string
         elif event == "refined query" and text_delta:
@@ -290,7 +278,14 @@ async def _run_one_question(
         # ignore other events for the Excel export
 
     answer_stream_text = "".join(answer_buffer)
-    main_answer, references = _extract_answer_and_refs(answer_stream_text)
+    main_answer, md_references = _extract_answer_and_refs(answer_stream_text)
+
+    # Prefer references streamed as `references` events (authoritative — emitted
+    # directly from the retrieved nodes in emit_query_answer_references). Fall
+    # back to references parsed from the answer markdown only if the stream
+    # didn't emit any.
+    streamed_refs = _parse_streamed_references(references_lines)
+    references = streamed_refs if streamed_refs else md_references
 
     return {
         "question": question,
@@ -302,6 +297,46 @@ async def _run_one_question(
         "related_queries_json": related_queries_json,
         "raw_stream": answer_stream_text,
     }
+
+
+_REF_LINE_RE = re.compile(
+    r"^\[(?P<name>.+?)\]\((?P<url>.+?)\)(?:\s*\|\|IMG\|\|\s*(?P<icon>.+?))?\s*$"
+)
+
+
+def _parse_streamed_references(lines: List[str]) -> List[Dict[str, str]]:
+    """Parse references emitted as one bullet per `references` event.
+
+    Each line is `[Name](url) ||IMG|| icon_url\\n` or `[Name](url)\\n` —
+    see emit_query_answer_references in agent_workflow_answer.py.
+    """
+    out: List[Dict[str, str]] = []
+    seen_urls = set()
+    for raw in lines:
+        for piece in raw.splitlines():
+            piece = piece.strip()
+            if not piece:
+                continue
+            m = _REF_LINE_RE.match(piece)
+            if not m:
+                continue
+            url = m.group("url").strip()
+            if not url or url in seen_urls:
+                continue
+            seen_urls.add(url)
+            out.append({
+                "title": m.group("name").strip(),
+                "url": url,
+                "icon_url": (m.group("icon") or "").strip(),
+            })
+    return out
+
+
+def _format_references_for_cell(refs: List[Dict[str, str]]) -> str:
+    """One reference per line as 'Title — URL' for readability in Excel."""
+    if not refs:
+        return ""
+    return "\n".join(f"{r.get('title','').strip()} — {r.get('url','').strip()}" for r in refs)
 async def run_batch(
     questions: List[Dict[str, Any]],   # list of dicts from load_questions()
     vector_index: str,
@@ -312,11 +347,14 @@ async def run_batch(
     related_only: bool = False,
     main_category: Optional[str] = None,
     query_severity: Optional[str] = None,
+    psa_ssa_threshold: float = 0.65,
+    qa_bank_index: Optional[str] = None,
 ):
     rows: List[Dict[str, Any]] = []
 
     run_date = _today_oslo_date_str()
     answer_col = f"answer - run date {run_date}"
+    refs_col = f"references - run date {run_date}"
 
     # Helper to check blank values robustly
     def _is_blank(s: Any) -> bool:
@@ -328,6 +366,7 @@ async def run_batch(
 
         print(f"[{i}/{len(questions)}] Running agent for: {q[:80]}{'...' if len(q) > 80 else ''}")
 
+        refs_text = ""
         try:
             res = await _run_one_question(
                 q,
@@ -337,8 +376,11 @@ async def run_batch(
                 related_only=related_only,
                 main_category=main_category,
                 query_severity=query_severity,
+                psa_ssa_threshold=psa_ssa_threshold,
+                qa_bank_index=qa_bank_index,
             )
             answer_text = res["answer_markdown"]
+            refs_text = _format_references_for_cell(res.get("references") or [])
         except Exception as e:
             answer_text = f"ERROR: {e}"
 
@@ -353,11 +395,12 @@ async def run_batch(
                 "question": q,
                 "expected answer": exp,
                 answer_col: answer_text,
+                refs_col: refs_text,
             }
         )
 
-    # 1) Write/append Excel (creates file if missing, otherwise adds new run column)
-    run_df = pd.DataFrame(rows, columns=["question", "expected answer", answer_col])
+    # 1) Write/append Excel (creates file if missing, otherwise adds new run columns)
+    run_df = pd.DataFrame(rows, columns=["question", "expected answer", answer_col, refs_col])
     upsert_answers_excel(out_xlsx, run_df)
 
     # 2) Write the updated JSON back (now includes filled expected_answer)
@@ -446,10 +489,28 @@ logging.basicConfig(
 )
 
 def main():
-    
-   
-    
-    # Load indexes
+    ap = argparse.ArgumentParser(description="Batch questions through your agent and export to Excel.")
+    ap.add_argument("--input", "-i", required=True, help="Path to JSON file with questions")
+    ap.add_argument("--out", "-o", default="answers.xlsx", help="Output Excel path")
+    ap.add_argument("--vector-index", "-v", required=True,
+                    help="Main vector index to use (e.g. hvaerinnafor, hvaerinnafor_unified)")
+    ap.add_argument("--topk", type=int, default=5, help="similarity_top_k")
+    ap.add_argument("--cutoff", type=float, default=0.75, help="similarity_cutoff")
+    ap.add_argument("--related-only", action="store_true", help="Only compute related queries/categories (no answers)")
+    ap.add_argument("--main-category", default=None, help="Force a main category (optional)")
+    ap.add_argument("--query-severity", default=None, help="Force a severity: Green|Yellow|Red (optional)")
+    ap.add_argument("--psa-ssa-threshold", type=float, default=0.65,
+                    help="Cutoff for psa_ssa_topics tier-1 route. Set to 0 to disable (e.g. for pure unified mode).")
+    ap.add_argument("--qa-bank-index", default=None,
+                    help="Explicit QA-bank index name. If omitted the server falls back to "
+                         "'{vectorIndex}_qa_bank' then 'hvaerinnafor_qa_bank'. "
+                         "Set to 'hvaerinnafor_qa_bank' when --vector-index is hvaerinnafor_unified "
+                         "to silence the 'QA-bank not found' warning.")
+    args = ap.parse_args()
+
+    # Load every index defined in config.VECTOR_INDEX_MAP so the cascade
+    # (psa_ssa_topics) and the unified index are available alongside the
+    # legacy article + qa_bank pair.
     try:
         found_any = read_all_indexes_from_storage(VECTOR_INDEX_MAP)
         if found_any:
@@ -459,44 +520,33 @@ def main():
     except Exception as e:
         logging.error(f"Failed to read indexes from storage: {e}")
         vector_store.indexes_loaded = False
-        
-    # --- Use the store ---
-    # NOTE: correct the name here ("hvaerinnafor", not "hvaerinnfor")
-    entry = vector_store.get("hvaerinnafor")
-    if entry is None:
-        raise RuntimeError("Index 'hvaerinnafor' not found. Loaded: "
-                        + ", ".join([e.name for e in vector_store.get_all()]))
 
-    index = entry.index  # type: ignore
-    vector_index_description = entry.description
-    logging.info("Found entry: %s", vector_index_description)
-    
-    ap = argparse.ArgumentParser(description="Batch 30 questions through your agent and export to Excel.")
-    ap.add_argument("--input", "-i", required=True, help="Path to JSON file with questions")
-    ap.add_argument("--out", "-o", default="answers.xlsx", help="Output Excel path")
-    ap.add_argument("--vector-index", "-v", required=True, help="Name of the vector index to use")
-    ap.add_argument("--topk", type=int, default=5, help="similarity_top_k")
-    ap.add_argument("--cutoff", type=float, default=0.35, help="similarity_cutoff")
-    ap.add_argument("--related-only", action="store_true", help="Only compute related queries/categories (no answers)")
-    ap.add_argument("--main-category", default=None, help="Force a main category (optional)")
-    ap.add_argument("--query-severity", default=None, help="Force a severity: Green|Yellow|Red (optional)")
-    args = ap.parse_args()
+    # Fail fast if the requested main index didn't load.
+    entry = vector_store.get(args.vector_index)
+    if entry is None:
+        raise RuntimeError(
+            f"Index '{args.vector_index}' not found. Loaded: "
+            + ", ".join([e.name for e in vector_store.get_all()])
+        )
+    logging.info("Using main index: %s — %s", entry.name, entry.description)
 
     questions = load_questions(args.input)
 
-    print(f"WARNING: Input contains {len(questions)} questions (not 30). Proceeding.")
+    print(f"Input contains {len(questions)} questions. Proceeding.")
 
     asyncio.run(
         run_batch(
             questions=questions,
             vector_index=args.vector_index,
             out_xlsx=args.out,
-            input_json_path=args.input,   # NEW
+            input_json_path=args.input,
             similarity_top_k=args.topk,
             similarity_cutoff=args.cutoff,
             related_only=args.related_only,
             main_category=args.main_category,
             query_severity=args.query_severity,
+            psa_ssa_threshold=args.psa_ssa_threshold,
+            qa_bank_index=args.qa_bank_index,
         )
     )
 

@@ -930,7 +930,7 @@ def query_grounded(state: WorkerState) -> Dict[str, Any]:
             refs.append({
                 "name": (meta.get("title") or "Ingen tittel").lstrip(),
                 "url": url,
-                "icon_url": meta.get("icon_url", "Ingen URL for ikon"),
+                "icon_url": meta.get("icon_url", ""),
                 "relevancy_index": float(getattr(nws, "score", 0.0)),
             })
 
@@ -1239,7 +1239,8 @@ def empathy_rewrite(state: State_Answer) -> Dict[str, Any]:
 
         rewritten, in_tokens, out_tokens = _invoke_with_usage(llm, prompt_value)
         
-        print(f"Rewritten answer: fra:<{answer}> +ntil--->\n<{rewritten.content}>")
+        print(f"Rewritten answer fra:<{answer}>")
+        print(f"Rewritten answer til:<{rewritten.content}>")
         return {
             "final_answer": rewritten.content,
             "input_tokens": in_tokens,      

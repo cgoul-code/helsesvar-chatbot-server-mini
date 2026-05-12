@@ -28,6 +28,58 @@ def _format_sse(data: str, event: str | None = None) -> str:
     lines.append("")  # blank line terminator
     return "\n".join(lines)
 
+
+# SSE comment line — silently ignored by EventSource clients but keeps the
+# socket alive across browser/proxy/Hypercorn idle timeouts.
+SSE_HEARTBEAT = ": keepalive\n\n"
+HEARTBEAT_INTERVAL_S = 15
+
+
+async def _with_heartbeat(agen, interval: float = HEARTBEAT_INTERVAL_S):
+    """Wrap an async generator and emit ('heartbeat', None) when it's idle.
+
+    Yields tuples of:
+      ("chunk", item)      — a real value produced by `agen`
+      ("heartbeat", None)  — emitted every `interval` seconds of silence
+
+    Exceptions raised by `agen` propagate out of the consumer's `async for`.
+    """
+    queue: asyncio.Queue = asyncio.Queue()
+
+    async def _pump():
+        try:
+            async for item in agen:
+                await queue.put(("chunk", item))
+        except asyncio.CancelledError:
+            raise
+        except Exception as e:  # propagate to consumer
+            await queue.put(("error", e))
+        finally:
+            await queue.put(("done", None))
+
+    pump_task = asyncio.create_task(_pump())
+    try:
+        while True:
+            try:
+                kind, payload = await asyncio.wait_for(queue.get(), timeout=interval)
+            except asyncio.TimeoutError:
+                yield ("heartbeat", None)
+                continue
+
+            if kind == "chunk":
+                yield ("chunk", payload)
+            elif kind == "error":
+                raise payload
+            elif kind == "done":
+                return
+    finally:
+        if not pump_task.done():
+            pump_task.cancel()
+            try:
+                await pump_task
+            except BaseException:
+                pass
+
 def register_routes(app):
     def _cors_preflight():
         return Response(
@@ -216,10 +268,14 @@ def register_routes(app):
             async def stream_examples():
                 yield _format_sse(json.dumps({"event": "open", "message": "ok"}, ensure_ascii=False))
                 try:
-                    async for chunk in agent_fn(query_settings, server_settings, vector_store):
-                        data = json.dumps(chunk, ensure_ascii=False) if isinstance(chunk, dict) else str(chunk)
+                    async for kind, item in _with_heartbeat(
+                        agent_fn(query_settings, server_settings, vector_store)
+                    ):
+                        if kind == "heartbeat":
+                            yield SSE_HEARTBEAT
+                            continue
+                        data = json.dumps(item, ensure_ascii=False) if isinstance(item, dict) else str(item)
                         yield _format_sse(data)
-                        await asyncio.sleep(0)
 
                 except (asyncio.CancelledError, GeneratorExit):
                     return
@@ -287,17 +343,17 @@ def register_routes(app):
             async def stream_answer():
                 yield _format_sse(json.dumps({"event": "open", "message": "ok", "session_id": session_id}, ensure_ascii=False))
 
-                heartbeat_interval = 20
-                last_sent = asyncio.get_event_loop().time()
-
-                # IMPORTANT: hent fersk historikk (copy) for denne streamen
-                stream_history = _load_history(session_id)
-
                 assistant_buffer: List[str] = []
 
                 try:
-                    async for chunk in agent_fn(query_settings, server_settings, vector_store):
-                        # chunk er ofte dict-event fra workflowen
+                    async for kind, item in _with_heartbeat(
+                        agent_fn(query_settings, server_settings, vector_store)
+                    ):
+                        if kind == "heartbeat":
+                            yield SSE_HEARTBEAT
+                            continue
+
+                        chunk = item
                         if isinstance(chunk, dict):
                             if chunk.get("event") == "answer":
                                 delta = (
@@ -307,21 +363,11 @@ def register_routes(app):
                                 )
                                 if delta:
                                     assistant_buffer.append(delta)
-
                             data = json.dumps(chunk, ensure_ascii=False)
                         else:
                             data = str(chunk)
 
                         yield _format_sse(data)
-
-                        # heartbeat bookkeeping
-                        last_sent = asyncio.get_event_loop().time()
-                        await asyncio.sleep(0)
-
-                        now = asyncio.get_event_loop().time()
-                        if now - last_sent >= heartbeat_interval:
-                            yield ": ping\n\n"
-                            last_sent = now
 
                 except (asyncio.CancelledError, GeneratorExit):
                     return
