@@ -12,6 +12,10 @@ class QuerySettings:
         self.psa_ssa_threshold = float(kwargs.get('psa_ssa_threshold', 0.65))    # cutoff for psa_ssa_topics tier-1 route; <=0 disables
         self.vectorIndex = kwargs.get('vectorIndex', "None")
         self.qa_bank_index = kwargs.get('qa_bank_index', None)  # explicit QA-bank override; None = use fallback chain
+        # Optional client override for response style. "" = auto-route via
+        # pick_response_style(severity, stance). Valid values: factual,
+        # warm, supportive, crisis. Unknown values fall back to auto.
+        self.response_style = kwargs.get('response_style', "")
         self.user_content = kwargs.get('user_content', "")
         
         self.agent = kwargs.get('agent', "structured")
@@ -40,6 +44,7 @@ def get_query_settings(json_request):
         psa_ssa_threshold=json_request.get('psa_ssa_threshold', 0.65),
         vectorIndex=json_request.get('vectorIndex', "hvaerinnafor"),
         qa_bank_index=json_request.get('qa_bank_index', None),
+        response_style=json_request.get('response_style', ""),
         agent = json_request.get('agent', "structured"),
         related_only = json_request.get('related_only', False),  
         main_category = json_request.get('main_category', ""),  

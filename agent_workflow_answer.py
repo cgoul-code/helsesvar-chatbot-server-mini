@@ -31,7 +31,34 @@ from langchain_core.callbacks import UsageMetadataCallbackHandler
 
 from rapidfuzz.fuzz import partial_ratio
 
-from registry import subqueries_prompt, GROUNDED_PROMPT, CANNOT_ANSWER_PLACEHOLDER, EMPATHY_REWRITE_PROMPT
+from registry import (
+    subqueries_prompt,
+    GROUNDED_PROMPT,
+    CANNOT_ANSWER_PLACEHOLDER,
+    ANALYZE_QUERY_PROMPT,
+    STYLE_WARM_PROMPT,
+    STYLE_SUPPORTIVE_PROMPT,
+    STYLE_CRISIS_PROMPT,
+    HARM_REFUSAL_ANSWER,
+    HARM_REFUSAL_SHORT_ANSWER,
+    HELP_AFTER_HARM_ANSWER,
+    HELP_AFTER_HARM_SHORT_ANSWER,
+    REFUSE_HARM_PROMPT,
+    HELP_AFTER_HARM_PROMPT,
+)
+
+# Gyldige response-style-verdier. 'factual' = skip rewrite. Hvis klienten
+# sender en ukjent verdi (eller ingen), faller vi tilbake til auto-routing
+# via pick_response_style(severity, stance).
+RESPONSE_STYLES = ("factual", "warm", "supportive", "crisis")
+
+# Mapping fra stil-id til prompt-template. 'factual' har ingen prompt –
+# apply_response_style hopper over LLM-callen og returnerer svaret uendret.
+_STYLE_TO_PROMPT = {
+    "warm": STYLE_WARM_PROMPT,
+    "supportive": STYLE_SUPPORTIVE_PROMPT,
+    "crisis": STYLE_CRISIS_PROMPT,
+}
 
 from agent_shared import Reference, _emit, _node_text, _build_related_queries_retriever, _as_int, _as_float, _dedupe_references, _normalize
 
@@ -135,6 +162,11 @@ class State_Answer(TypedDict):
     refined_query: str
     main_category: str
     query_severity: Literal["Green", "Yellow", "Red", ""]
+    stance: Literal["info_seeker", "affected_party", "harm_to_others", "ambiguous"]
+    harm_to_others_tense: Literal["planning", "completed", "unclear", "na"]
+    # Response-style. Tom streng = auto-rute via pick_response_style(). En
+    # av RESPONSE_STYLES = klient-override som hopper over auto-routingen.
+    response_style: str
     relevancy_band: str
     best_node_score: float
     response: Response | None
@@ -170,6 +202,12 @@ class DialogPlan(BaseModel):
     last_user_question: str = Field(description="Siste brukerspørsmål")
     intents: List[NextIntent] = Field(min_items=1, max_items=4)
 
+class RefusalResponse(BaseModel):
+    """Strukturert output for refuse_harm_to_others og help_after_harm."""
+    answer: str = Field(description="Hele svaret i markdown.")
+    short_answer: str = Field(description="Én setning som oppsummerer svaret.")
+
+
 class QueryPlan(BaseModel):
     refined_query: str = Field(
         description="Rewritten, clear version of user's question in Norwegian."
@@ -183,6 +221,24 @@ class QueryPlan(BaseModel):
     query_severity: Literal["Green", "Yellow", "Red", ""] = Field(
         description=(
             "Define the severity (ALVORLIGHESGRAD) for the query")
+    )
+    stance: Literal["info_seeker", "affected_party", "harm_to_others", "ambiguous"] = Field(
+        default="info_seeker",
+        description=(
+            "Brukerens rolle i situasjonen: 'info_seeker' (ber om generell info), "
+            "'affected_party' (beskriver noe som rammer brukeren selv), "
+            "'harm_to_others' (ber om hjelp til å påføre andre skade — straffbart "
+            "eller åpenbart skadelig), eller 'ambiguous' (uklart hvem som er aktør)."
+        ),
+    )
+    harm_to_others_tense: Literal["planning", "completed", "unclear", "na"] = Field(
+        default="na",
+        description=(
+            "Bare relevant når stance='harm_to_others'. Tempus for handlingen: "
+            "'planning' (brukeren vurderer/planlegger), 'completed' (brukeren "
+            "har allerede gjort det), 'unclear' (tvetydig). Sett 'na' når "
+            "stance ikke er 'harm_to_others'."
+        ),
     )
 
 class WorkerState(TypedDict):
@@ -682,75 +738,26 @@ def analyze_query(state: State_Answer) -> Dict[str, Any]:
     _emit("Analyze and possibly rewrite user query", event="info")
 
     llm = state["llm"]
-    
+
     conversation_str = state.get("conversation_str", "")
     original_q = state["query"]
-    
-    prompt = (
-        "Du er en helseveileder som hjelper ungdom i Norge.\n\n"
-        "Oppgave:\n"
-        "1) Skriv brukerens siste spørsmål om til én kort, tydelig og konkret formulering "
-        "på norsk bokmål som egner seg for søk i en fagartikkel-base. Bevar meningen, men "
-        "oversett ungdomsspråk til et mer nøytralt, søkbart språk:\n"
-        "- Utvid slang, forkortelser og engelske lån til ord som kan stå i fagtekster "
-        "(f.eks. «fk/fuck» → fjernes eller blir til «hvorfor», «typ» → «for eksempel», "
-        "«random» → «tilfeldig», «sus» → «mistenkelig/utrygg», «cringe» → «pinlig», "
-        "«ghosta» → «sluttet å svare», «lol/haha» → fjernes).\n"
-        "- Fiks åpenbare skrivefeil, manglende mellomrom og manglende tegnsetting.\n"
-        "- Fjern emojier, men tolk meningen de bærer (f.eks. 😰 = engstelig, "
-        "💔 = kjærlighetssorg, 🍆💦 = sex/utløsning).\n"
-        "- Erstatt muntlige fyllord («lissom», «bare typ», «sant nok», «ass», «serr») "
-        "med nøytrale formuleringer eller fjern dem.\n"
-        "- Bruk fagord når det er tydelig hva brukeren mener "
-        "(f.eks. «det renner noe rart» → «utflod», «mensen er rar» → «uregelmessig menstruasjon»).\n"
-        "- Behold «jeg»-formen hvis brukeren bruker den.\n"
-        "- Ikke legg til informasjon, tolkninger eller antakelser som ikke ligger i spørsmålet.\n"
-        "- Hvis spørsmålet allerede er tydelig og på god norsk, la det stå nesten uendret.\n\n"
-        "Eksempler:\n"
-        "- «fk hvorfor får jeg utflod hele tiden??» → «Hvorfor får jeg utflod hver dag?»\n"
-        "- «kjæresten min er så sus, vet ikke hva jeg skal gjøre 😭» → «Hvordan håndterer jeg mistillit til kjæresten min?»\n"
-        "- «hvor lenge varer mensen lissom» → «Hvor lenge varer en vanlig menstruasjon?»\n"
-        "- «han ghosta meg etter vi hadde sex, er det noe galt med meg» → «Hvorfor kan en partner slutte å ta kontakt etter sex?»\n"
-        "- «serr kan man bli gravid første gang???» → «Kan man bli gravid første gang man har sex?»\n\n"
-        "2) Vurder om spørsmålet bør deles opp i flere delspørsmål for å gi et godt svar.\n"
-        "- Sett needs_subqueries = True KUN hvis spørsmålet inneholder 3+ helt separate temaer.\n"
-        "- For de fleste spørsmål er False riktig.\n"
 
-        "3) Kategoriser alvorlighetsgraden av spørsmålet i én av tre kategorier: \"Green\", \"Yellow\", eller \"Red\".\n\n"
-        "ALVORLIGHESGRAD \"GREEN\":\n"
-        "- Forebyggende og trygghetsskapende.\n"
-        "- Spørsmål som ber om generell informasjon, kunnskap eller veiledning for å forebygge problemer og styrke god seksuell helse.\n"
-        "- Brukeren ønsker å øke forståelse, trygghet og bevissthet (f.eks. samtykke, prevensjon, kommunikasjon, følelser, kunnskap om kroppen).\n"
-        "- Ingen akutt situasjon eller personlig krise beskrives.\n"
-        "Eksempel: «Hvordan kan jeg snakke med partneren min om grenser?» eller «Hvilke typer prevensjon finnes?». \n\n"
-        "ALVORLIGHESGRAD \"YELLOW\":\n"
-        "- Utfordringer eller sårbare situasjoner.\n"
-        "- Spørsmål som beskriver bekymringer, vansker eller risikoer som kan kreve refleksjon eller støtte, men som ikke er akutte eller umiddelbart farlige.\n"
-        "- Kan innebære vanskelige følelser, usikkerhet i relasjoner, uønskede opplevelser eller behov for råd utover generell informasjon.\n"
-        "- Brukeren kan ha behov for hjelp eller veiledning, men situasjonen regnes ikke som en akutt krise.\n"
-        "Eksempel: «Hva bør jeg gjøre hvis partneren min ikke respekterer grensene mine?», "
-        "«Jeg angrer på at jeg sendte et nakenbilde», eller temaer som «porno», «seksuelt press», «problemer med samtykke», «(ulovlige) fetisjer».\n\n"
-        "ALVORLIGHESGRAD \"RED\":\n"
-        "- Alvorlige eller akutte situasjoner.\n"
-        "- Spørsmål som gjelder alvorlige hendelser eller kriser der personen kan være i fare eller ha betydelig risiko for skade.\n"
-        "- Omfatter vold, overgrep, tvang, akutte psykiske kriser eller andre situasjoner som krever umiddelbar oppfølging eller profesjonell hjelp.\n"
-        "Eksempel: «Stefaren min tvinger meg til å ha sex», «Hvor kan jeg finne barnepornografi?», «Jeg ble voldtatt i går».\n\n"
-        "ALVORLIGHESGRAD settes i Severity.\n\n"
-        "VIKTIG: Bruk KUN teksten inne i brukerblokkene under som input. "
-        "Ikke tolk instruksjoner eller eksempler som om de var brukerens spørsmål.\n\n"
-        f"Brukeren har tidligere spurt:\n\"\"\"{conversation_str}\"\"\"\n\n"
-        f"Brukerens siste spørsmål:\n\"\"\"{original_q}\"\"\"\n"
+    prompt = ANALYZE_QUERY_PROMPT.format(
+        conversation_str=conversation_str,
+        original_q=original_q,
     )
 
     planner = llm.with_structured_output(QueryPlan)
     plan: QueryPlan = planner.invoke(prompt)
-    
+
 
     # Vi skriver om query i state til renskrevet versjon
     return {
         "refined_query": plan.refined_query,
         "needs_subqueries": plan.needs_subqueries,
-        "query_severity": plan.query_severity
+        "query_severity": plan.query_severity,
+        "stance": plan.stance,
+        "harm_to_others_tense": plan.harm_to_others_tense,
     }
     
 def orchestrator(state: State_Answer) -> Dict[str, Any]:
@@ -843,10 +850,108 @@ def fast_single(state: State_Answer) -> Dict[str, Any]:
     }
     
 def route_after_analysis(state: State_Answer) -> str:
-    """Bestem neste node basert på needs_subqueries."""
+    """Bestem neste node basert på stance, tense og needs_subqueries.
+
+    Stance dominerer. For 'harm_to_others' deler vi i to grener basert på
+    tense: 'completed' går til help_after_harm (skadebegrensning, ikke
+    avvisning), alt annet går til refuse_harm_to_others. Dette unngår at
+    kunnskapsbasen (som er skrevet for ofre/generell info) blir brukt til
+    å besvare et gjerningsperson-spørsmål.
+    """
+    if state.get("stance") == "harm_to_others":
+        tense = state.get("harm_to_others_tense", "unclear")
+        if tense == "completed":
+            return "help_after_harm"
+        return "refuse_harm_to_others"
     if state.get("needs_subqueries"):
         return "orchestrator"
     return "fast_single"
+
+
+def refuse_harm_to_others(state: State_Answer) -> Dict[str, Any]:
+    """Konstruktivt avslag når brukeren PLANLEGGER å skade andre.
+
+    LLM-drevet for å håndtere ulike harm-kategorier generisk (deling av
+    bilder, overvåking av partner, trusler, catfishing, hevn-ideasjon
+    osv.). Faller tilbake til hardkodet melding hvis LLM-callen feiler.
+    """
+    _emit("Stance=harm_to_others (planning/unclear): refusal node", event="info")
+
+    llm = state["llm"]
+    query = state.get("refined_query") or state.get("query") or ""
+    tense = state.get("harm_to_others_tense", "unclear") or "unclear"
+    conversation_str = state.get("conversation_str", "") or ""
+
+    try:
+        prompt_value = REFUSE_HARM_PROMPT.format(
+            query=query,
+            tense=tense,
+            conversation_str=conversation_str,
+        )
+        result, in_tokens, out_tokens = _invoke_with_usage(
+            llm.with_structured_output(RefusalResponse),
+            prompt_value,
+        )
+        return {
+            "final_answer": result.answer,
+            "final_short_answer": result.short_answer,
+            "references": [],
+            "validate_response_result": "Accepted",
+            "input_tokens": in_tokens,
+            "output_tokens": out_tokens,
+        }
+    except Exception as e:
+        logging.error("refuse_harm_to_others LLM call failed, using static fallback: %s", e)
+        return {
+            "final_answer": HARM_REFUSAL_ANSWER,
+            "final_short_answer": HARM_REFUSAL_SHORT_ANSWER,
+            "references": [],
+            "validate_response_result": "Accepted",
+            "input_tokens": 0,
+            "output_tokens": 0,
+        }
+
+
+def help_after_harm(state: State_Answer) -> Dict[str, Any]:
+    """Konstruktiv hjelp når brukeren HAR utført noe som har skadet noen.
+
+    Ikke en avvisning – fokus på skadebegrensning, ta ansvar, kontakt
+    voksen/politi/advokat, hjelp den rammede, og få hjelp selv. LLM-
+    drevet, faller tilbake til hardkodet melding ved feil.
+    """
+    _emit("Stance=harm_to_others (completed): help_after_harm node", event="info")
+
+    llm = state["llm"]
+    query = state.get("refined_query") or state.get("query") or ""
+    conversation_str = state.get("conversation_str", "") or ""
+
+    try:
+        prompt_value = HELP_AFTER_HARM_PROMPT.format(
+            query=query,
+            conversation_str=conversation_str,
+        )
+        result, in_tokens, out_tokens = _invoke_with_usage(
+            llm.with_structured_output(RefusalResponse),
+            prompt_value,
+        )
+        return {
+            "final_answer": result.answer,
+            "final_short_answer": result.short_answer,
+            "references": [],
+            "validate_response_result": "Accepted",
+            "input_tokens": in_tokens,
+            "output_tokens": out_tokens,
+        }
+    except Exception as e:
+        logging.error("help_after_harm LLM call failed, using static fallback: %s", e)
+        return {
+            "final_answer": HELP_AFTER_HARM_ANSWER,
+            "final_short_answer": HELP_AFTER_HARM_SHORT_ANSWER,
+            "references": [],
+            "validate_response_result": "Accepted",
+            "input_tokens": 0,
+            "output_tokens": 0,
+        }
     
 def query_grounded(state: WorkerState) -> Dict[str, Any]:
     """
@@ -1212,44 +1317,95 @@ def synthesizer(state: State_Answer) -> Dict[str, Any]:
             "references": [],
         }
 
-def empathy_rewrite(state: State_Answer) -> Dict[str, Any]:
-    """Postprosesser det endelige svaret for å gi det en varmere, mer empatisk tone."""
+def pick_response_style(severity: str, stance: str) -> str:
+    """Auto-rute fra (severity, stance) til en av RESPONSE_STYLES.
 
-    _emit("Rewriting answer with empathy", event="info")
-    
-    # Bypass if response was rejected (placeholder answer, no valid sources)
-    #
+    Deterministisk policy-lookup, ikke en LLM-call. Brukes når klienten
+    ikke har sendt en eksplisitt response_style i request body.
+
+      Red                            → crisis
+      affected_party + Yellow        → supportive
+      affected_party + Green         → warm
+      info_seeker + Yellow           → warm
+      info_seeker / ambiguous + Green → factual (skip rewrite)
+    """
+    sev = (severity or "").strip()
+    st = (stance or "").strip()
+    if sev == "Red":
+        return "crisis"
+    if st == "affected_party":
+        return "supportive" if sev == "Yellow" else "warm"
+    if sev == "Yellow":
+        return "warm"
+    return "factual"
+
+
+def apply_response_style(state: State_Answer) -> Dict[str, Any]:
+    """Omskriv det endelige svaret i riktig stil.
+
+    Stilen bestemmes av (i) klient-override i state['response_style'],
+    eller (ii) auto-routing fra severity + stance via pick_response_style.
+    'factual' hopper over LLM-callen helt. 'warm'/'supportive'/'crisis'
+    bruker hver sin prompt fra registry.
+    """
+    # Bypass hvis svaret allerede er rejected (placeholder, ingen kilder)
     if state.get("validate_response_result") == "Rejected":
-        _emit("Skipping empathy rewrite: response was Rejected", event="info")
+        _emit("Skipping style rewrite: response was Rejected", event="info")
         return {}
 
-    llm = state["llm"]
     answer = state.get("final_answer", "")
-    severity = state.get("query_severity", "Green")
-
-    # Ikke omskriv placeholder-svar
     if not answer or len(answer) < 50:
         return {}
 
-    try:
-        prompt_value = EMPATHY_REWRITE_PROMPT.format(
-            answer=answer,
-            severity=severity,   # <-- også fiks denne buggen: var hardkodet til "Red"
+    # Resolve effective style: klient-override hvis gyldig, ellers auto.
+    override = (state.get("response_style") or "").strip()
+    if override in RESPONSE_STYLES:
+        style = override
+        _emit(f"Response style: {style} (client override)", event="info")
+    else:
+        style = pick_response_style(
+            state.get("query_severity", ""),
+            state.get("stance", ""),
         )
+        _emit(f"Response style: {style} (auto)", event="info")
 
-        rewritten, in_tokens, out_tokens = _invoke_with_usage(llm, prompt_value)
-        
-        print(f"Rewritten answer fra:<{answer}>")
-        print(f"Rewritten answer til:<{rewritten.content}>")
+    # Safety floor: Red severity tvinger alltid 'crisis', også når klienten
+    # har overstyrt til noe annet. Et test-/eval-valg av f.eks. 'factual' på
+    # et Red-spørsmål ville gitt et tørt fakta-svar på en akutt krise – det
+    # er aldri riktig. Auto-routingen returnerer allerede 'crisis' på Red,
+    # så denne sjekken er bare relevant når en klient-override forsøker å
+    # gå rundt det.
+    if state.get("query_severity") == "Red" and style != "crisis":
+        _emit(
+            f"Response style: forced crisis (was {style}, severity=Red)",
+            event="info",
+        )
+        style = "crisis"
+
+    # Factual = skip rewrite, behold svaret som det er.
+    if style == "factual":
+        return {"response_style": "factual"}
+
+    prompt_template = _STYLE_TO_PROMPT.get(style)
+    if prompt_template is None:
+        # Ukjent stil — burde ikke skje, men ikke krasj.
+        logging.warning("Unknown response style %r, skipping rewrite", style)
+        return {"response_style": style}
+
+    try:
+        prompt_value = prompt_template.format(answer=answer)
+        rewritten, in_tokens, out_tokens = _invoke_with_usage(
+            state["llm"], prompt_value
+        )
         return {
             "final_answer": rewritten.content,
-            "input_tokens": in_tokens,      
-            "output_tokens": out_tokens,    
+            "response_style": style,
+            "input_tokens": in_tokens,
+            "output_tokens": out_tokens,
         }
-
     except Exception as e:
-        logging.error("empathy_rewrite failed: %s", e)
-        return {}  # behold originalt svar ved feil
+        logging.error("apply_response_style (%s) failed: %s", style, e)
+        return {"response_style": style}  # behold originalt svar ved feil
 
 def emit_query_answer_references(state: State_Answer) -> Dict[str, Any]:
     """Emitter endelig svar + referanser som events."""
@@ -1703,35 +1859,44 @@ def related_queries_dialog_from_query(state: State_Answer) -> dict:
 
 builder = StateGraph(State_Answer)
 
-builder.add_node("analyze_query", analyze_query)          
-builder.add_node("fast_single", fast_single)              
+builder.add_node("analyze_query", analyze_query)
+builder.add_node("fast_single", fast_single)
 
 builder.add_node("orchestrator", orchestrator)
 builder.add_node("query_grounded", query_grounded)
 builder.add_node("synthesizer", synthesizer, join=True)
 builder.add_node("emit_query_answer_references", emit_query_answer_references)
 builder.add_node("related_queries_dialog_from_query", related_queries_dialog_from_query)
-builder.add_node("empathy_rewrite", empathy_rewrite)
+builder.add_node("apply_response_style", apply_response_style)
+builder.add_node("refuse_harm_to_others", refuse_harm_to_others)
+builder.add_node("help_after_harm", help_after_harm)
 
 # Start → analyse
 builder.add_edge(START, "analyze_query")
 
-# Etter analyse: enten fasttrack eller full multisteg-flyt
+# Etter analyse: refusal, help-after-harm, fasttrack eller full multisteg-flyt
 builder.add_conditional_edges(
     "analyze_query",
-    route_after_analysis,              # funksjonen over
-    ["fast_single", "orchestrator"],   # mulig returverdier
+    route_after_analysis,
+    ["fast_single", "orchestrator", "refuse_harm_to_others", "help_after_harm"],
 )
 
 # Hvis multi: bruk eksisterende flyt
 builder.add_conditional_edges("orchestrator", assign_workers, ["query_grounded"])
 builder.add_edge("query_grounded", "synthesizer")
-builder.add_edge("synthesizer", "empathy_rewrite")
-builder.add_edge("empathy_rewrite", "emit_query_answer_references")
+builder.add_edge("synthesizer", "apply_response_style")
+builder.add_edge("apply_response_style", "emit_query_answer_references")
 
 # Hvis fasttrack: gå rett til emitter
-builder.add_edge("fast_single", "empathy_rewrite")
-builder.add_edge("empathy_rewrite", "emit_query_answer_references")
+builder.add_edge("fast_single", "apply_response_style")
+# (apply_response_style → emit_query_answer_references er allerede koblet)
+
+# Refusal og help-after-harm: skip retrieval og apply_response_style. Begge
+# nodene produserer ferdig formulert tekst (LLM-drevet med statisk
+# fallback), og style-prompts er designet for å omskrive et grounded svar
+# – ikke et refusal/help-svar som allerede har riktig tone.
+builder.add_edge("refuse_harm_to_others", "emit_query_answer_references")
+builder.add_edge("help_after_harm", "emit_query_answer_references")
 
 # Videre er likt for begge ruter
 builder.add_edge("emit_query_answer_references", "related_queries_dialog_from_query")
@@ -1739,4 +1904,4 @@ builder.add_edge("related_queries_dialog_from_query", END)
 
 answer_workflow = builder.compile()
 from graph_utils import save_mermaid_diagram
-#save_mermaid_diagram(answer_workflow.get_graph())
+# save_mermaid_diagram(answer_workflow.get_graph())

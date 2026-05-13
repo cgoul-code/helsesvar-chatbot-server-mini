@@ -12,15 +12,23 @@ graph TD;
 	synthesizer(synthesizer)
 	emit_query_answer_references(emit_query_answer_references)
 	related_queries_dialog_from_query(related_queries_dialog_from_query)
+	apply_response_style(apply_response_style)
+	refuse_harm_to_others(refuse_harm_to_others)
+	help_after_harm(help_after_harm)
 	__end__([<p>__end__</p>]):::last
 	__start__ --> analyze_query;
 	analyze_query -.-> fast_single;
+	analyze_query -.-> help_after_harm;
 	analyze_query -.-> orchestrator;
+	analyze_query -.-> refuse_harm_to_others;
+	apply_response_style --> emit_query_answer_references;
 	emit_query_answer_references --> related_queries_dialog_from_query;
-	fast_single --> emit_query_answer_references;
+	fast_single --> apply_response_style;
+	help_after_harm --> emit_query_answer_references;
 	orchestrator -.-> query_grounded;
 	query_grounded --> synthesizer;
-	synthesizer --> emit_query_answer_references;
+	refuse_harm_to_others --> emit_query_answer_references;
+	synthesizer --> apply_response_style;
 	related_queries_dialog_from_query --> __end__;
 	classDef default fill:#f2f0ff,line-height:1.2
 	classDef first fill-opacity:0

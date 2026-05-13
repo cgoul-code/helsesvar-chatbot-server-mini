@@ -407,6 +407,9 @@ async def get_answer_as_stream(
         "needs_subqueries": False,
         "main_category": "",
         "query_severity": "",
+        "stance": "",
+        "harm_to_others_tense": "na",
+        "response_style": query_settings.response_style,
     }
 
 

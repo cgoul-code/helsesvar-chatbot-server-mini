@@ -19,6 +19,8 @@ feelings, and sexual health aimed at Norwegian youth aged 13–19.
 - [API endpoints](#api-endpoints)
 - [Session management](#session-management)
 - [Severity classification](#severity-classification)
+- [Safety routing (harm_to_others)](#safety-routing-harm_to_others)
+- [Response styles](#response-styles)
 - [Adding new content](#adding-new-content)
 - [Deployment](#deployment)
 
@@ -57,21 +59,27 @@ Quart HTTP server  (app.py / routes.py)
    │         LangGraph workflow  (agent_workflow_answer.py)    │
    │               │                                            │
    │         ┌─────┴──────┐                                    │
-   │    analyze_query   (rewrite + severity)                    │
+   │    analyze_query   (rewrite + severity + stance + tense)   │
    │         │                                                  │
-   │    ┌────┴─────┐                                            │
-   │ fast_single  orchestrator  (multi-subquery)                │
-   │    │              │                                        │
-   │    │         query_grounded  ×N  (parallel workers)        │
-   │    │              │                                        │
-   │    │         synthesizer                                   │
-   │    └──────────────┘                                        │
-   │         │                                                  │
-   │    empathy_rewrite                                         │
-   │         │                                                  │
-   │    emit_query_answer_references                            │
-   │         │                                                  │
-   │    related_queries_dialog_from_query                       │
+   │    ┌────┼─────┬───────────────┬──────────────────┐         │
+   │    │    │     │               │                  │         │
+   │ fast_  orch  refuse_harm_   help_after_harm                │
+   │ single estrator to_others   (stance=harm_to_                │
+   │    │    │   (stance=harm_   others, tense=                  │
+   │    │    │    to_others,    completed)                       │
+   │    │    │    tense≠completed)                              │
+   │    │    │                                                   │
+   │    │    │      query_grounded  ×N  (parallel workers)       │
+   │    │    │            │                                      │
+   │    │    │      synthesizer                                  │
+   │    │    └────────────┘                                      │
+   │    │         │                                              │
+   │    empathy_rewrite     ◄── refuse / help-after-harm SKIP    │
+   │         │                  empathy_rewrite (deres tekst er  │
+   │         │                  allerede formulert)              │
+   │    emit_query_answer_references                             │
+   │         │                                                   │
+   │    related_queries_dialog_from_query                        │
    │                                                            │
    ├── /chat  (agent: hvaerinnafor_related_qa) ────────────────┘
    │   agent_workflow_qa.py  →  fetch pre-written answer by node_id
@@ -102,12 +110,23 @@ machine:
 ```
 START
   └─► analyze_query          Rewrites query, detects severity (Green/Yellow/Red),
+                              classifies stance (info_seeker / affected_party /
+                              harm_to_others / ambiguous) and — if harm_to_others
+                              — the tense (planning / completed / unclear),
                               decides if subqueries are needed
-        ├─► fast_single       Single question — one worker, direct answer
-        └─► orchestrator      Multi-topic — splits into subqueries
+        ├─► refuse_harm_to_others   stance=harm_to_others + tense ∈ {planning, unclear}
+        │                            LLM-driven constructive refusal. Skips
+        │                            retrieval and empathy_rewrite.
+        ├─► help_after_harm         stance=harm_to_others + tense=completed
+        │                            LLM-driven damage-limitation guidance.
+        │                            Skips retrieval and empathy_rewrite.
+        ├─► fast_single             Single question — one worker, direct answer
+        └─► orchestrator            Multi-topic — splits into subqueries
               └─► query_grounded  ×N   Retrieval → grounded answer → citation check
                     └─► synthesizer   Merges sub-answers into one coherent response
-                          └─► empathy_rewrite   Adds warmth/empathy based on severity
+                          └─► apply_response_style   Rewrites tone per response-style profile
+                                                      (factual / warm / supportive / crisis).
+                                                      'factual' skips the rewrite entirely.
                                 └─► emit_query_answer_references   Streams answer + refs
                                       └─► related_queries_dialog_from_query   Suggests follow-up Qs
 END
@@ -332,6 +351,7 @@ Accept: text/event-stream
 | **`vectorIndex`** | string | **per [retrieval mode](#retrieval-modes)** |
 | **`psa_ssa_threshold`** | number | **per [retrieval mode](#retrieval-modes)** |
 | `qa_bank_index` | string \| null | *Optional.* Explicit QA-bank index name (used for related-question suggestions and the fast follow-up path). If omitted or the named index isn't loaded, the server tries `{vectorIndex}_qa_bank` then falls back to `hvaerinnafor_qa_bank`. Set this to suppress the "QA-bank … not found" warning when running with a `vectorIndex` that has no matching `_qa_bank` (e.g. `hvaerinnafor_unified` → set `qa_bank_index: "hvaerinnafor_qa_bank"`). |
+| `response_style` | string \| null | *Optional.* Override for the answer rewrite style. One of `"factual"` (skip rewrite), `"warm"`, `"supportive"`, `"crisis"`. Omit or use unknown value to auto-route from severity + stance. See [Response styles](#response-styles). |
 
 **Per-mode values:**
 
@@ -444,6 +464,184 @@ professional help resources (e.g. Sex og samfunn).
 
 ---
 
+## Safety routing (harm_to_others)
+
+`analyze_query` doesn't only assess severity — it also classifies the user's
+**stance** in the situation. This is a separate axis from severity and is what
+decides whether the question should be answered from the knowledge base at all,
+or routed to a dedicated safety node.
+
+### Stance
+
+| Stance | Meaning | Example |
+|---|---|---|
+| `info_seeker` | Asks for general knowledge or advice, no specific actor | "Hva sier loven om deling av nakenbilder?" |
+| `affected_party` | Describes something that affects the user themselves (victim, pressured, worried) | "Eksen min truer med å dele nakenbilder av meg" |
+| `harm_to_others` | Asks for help performing an illegal/harmful act on another person | "Jeg vil dele nakenbilder av eksen min" |
+| `ambiguous` | Unclear who is the actor and who is the target | — |
+
+The classifier is told to break ties toward `harm_to_others` when a concrete
+intention is expressed ("jeg vil …", "hva er enkleste måten å …"), and toward
+`info_seeker` for pure knowledge questions ("hva sier loven om …").
+
+### Tense (only when stance = `harm_to_others`)
+
+When stance is `harm_to_others`, a second classification picks the **tense** of
+the harmful action. This decides which safety node handles the response:
+
+| Tense | Triggers on | Routes to |
+|---|---|---|
+| `planning` | Future/modal verbs: "vil", "skal", "hvordan kan jeg", "hva er enkleste måten å …" | `refuse_harm_to_others` |
+| `completed` | Past tense / present perfect: "har sendt", "delte", "filmet", "installerte" | `help_after_harm` |
+| `unclear` | Ambiguous (e.g. "har bildene og vurderer å dele dem") | `refuse_harm_to_others` |
+| `na` | Stance is not `harm_to_others` | (normal flow) |
+
+### Safety nodes
+
+Both nodes are **LLM-driven** with strict system prompts in
+[registry.py](registry.py) (`REFUSE_HARM_PROMPT`, `HELP_AFTER_HARM_PROMPT`),
+and fall back to hardcoded messages (`HARM_REFUSAL_ANSWER`,
+`HELP_AFTER_HARM_ANSWER`) if the LLM call fails. Both nodes deliberately
+**skip retrieval and empathy_rewrite**:
+
+- Retrieval is skipped because the knowledge base is written for victims and
+  general info, not for perpetrators — answering a perpetrator question from
+  the victim corpus produces the wrong frame.
+- `empathy_rewrite` is skipped because its prompt contains a victim-oriented
+  example for the "deling av nakenbilder uten samtykke" topic which would pull
+  the response back into the victim frame regardless of stance.
+
+**`refuse_harm_to_others`** — for planning/unclear cases. Acknowledges the
+underlying feeling briefly, states clearly that the act is illegal or harmful
+(LLM cites Norwegian penal code when it can be precise: §267a image sharing,
+§282 intimate partner abuse, §263/266 threats, §297–299 sexual assault,
+§305 grooming, §312 incest, §145 stalkerware, etc.), **never describes how
+the act could be performed**, and points to 2–3 concrete resources (Mental
+Helse Ungdom 116 123, Kors på halsen 16 111, Slettmeg.no, politiet, Sex og
+samfunn, a trusted adult).
+
+**`help_after_harm`** — for completed cases. **Not** a refusal — the harm is
+already done, and a cold refusal helps no one. Acknowledges that reaching out
+takes courage, gives a realistic picture of the legal/personal consequences,
+and provides concrete next steps focused on damage limitation: stop further
+spread (Slettmeg.no), talk to a trusted adult, consider proactively contacting
+police or a lawyer, think about how to limit harm for the affected party, and
+get help for the user themselves.
+
+---
+
+## Response styles
+
+The `apply_response_style` node (formerly `empathy_rewrite`) rewrites the
+final answer to fit the situation. Instead of one prompt with severity-
+conditional hints, there are now **four named profiles**, each with its own
+prompt and its own examples — so no profile leaks the wrong tone into another.
+
+| Style | When used | Characteristics |
+|---|---|---|
+| `factual` | `info_seeker` + Green (or unmatched) | **Rewrite is skipped entirely.** Saves a full LLM call. The grounded answer is returned as-is. |
+| `warm` | `info_seeker` + Yellow, or `affected_party` + Green | Light normalization, max one acknowledging sentence, then facts. Conversational but not heavy. |
+| `supportive` | `affected_party` + Yellow | Opens with validation ("det du beskriver høres vanskelig ut"), then facts, closes with presence ("du står ikke alene"). |
+| `crisis` | Severity = Red, any stance | Direct support first, single clearest next action, short and focused. Avoids long bullet menus. |
+
+### Auto-routing
+
+`apply_response_style` calls `pick_response_style(severity, stance)`
+([agent_workflow_answer.py](agent_workflow_answer.py)) to pick a profile
+deterministically. The full matrix:
+
+| stance \ severity | Green (or empty) | Yellow | Red |
+|---|---|---|---|
+| `info_seeker` | `factual` (skip) | `warm` | `crisis` |
+| `affected_party` | `warm` | `supportive` | `crisis` |
+| `ambiguous` | `factual` (skip) | `warm` | `crisis` |
+| `harm_to_others` | *(never reaches this node — routed to `refuse_harm_to_others` or `help_after_harm` instead)* | *(same)* | *(same)* |
+
+Two asymmetries worth noting:
+
+- **`Red` always routes to `crisis`**, regardless of stance. Severity is
+  checked before stance in `pick_response_style`, so the stance row doesn't
+  matter on Red.
+- **`affected_party + Green` is `warm`, not `factual`.** A self-affected
+  question gets at least a light empathy pass even if the topic is
+  classified as preventive/Green — we want to acknowledge the user's
+  situation, not just dispense facts.
+
+This routing is policy, not an LLM decision. It's predictable and auditable.
+
+### Client override
+
+The client can override the auto-routing by sending `response_style` in the
+`POST /chat` request body, with one of: `"factual"`, `"warm"`,
+`"supportive"`, `"crisis"`. Omit the field (or send an unknown value) to use
+auto-routing.
+
+**Precedence:**
+1. **Safety floor:** if `severity == "Red"`, the style is always clamped to
+   `crisis` — *even if the client requested something else*. A client
+   override of e.g. `factual` on an acute crisis would produce a cold,
+   fact-only response on a Red question, which is never appropriate. The
+   floor only matters when an override is present (auto-routing returns
+   `crisis` on Red anyway).
+2. Valid `response_style` in request body → that style wins (subject to
+   the safety floor above).
+3. Field absent, empty, or unknown → server falls through to
+   `pick_response_style(severity, stance)`.
+
+Use overrides for A/B testing tone, for letting users pick their own
+preference, or for forcing a particular style during evaluation.
+
+```json
+{
+  "messages": [{ "role": "user", "content": "..." }],
+  "session_id": "...",
+  "vectorIndex": "hvaerinnafor_unified",
+  "response_style": "warm"
+}
+```
+
+**Client UI (HEI 2.0):** the chatbot client exposes a pill row mirroring
+this — `Auto / Fakta / Vennlig / Støtte / Krise`. "Auto" sends nothing
+(field omitted via spread, so the server auto-routes). The other pills map
+1:1 to the four style values. Mode is read per-request; already-rendered
+turns keep whatever style they were sent under. See
+[`RESPONSE_STYLES` in HeiChatClient.jsx](https://github.com/cgoul-code/chatbot-client-HEI20-v2/blob/main/client/src/HeiChatClient.jsx).
+
+**Debugging:** `apply_response_style` emits an `info` SSE event indicating
+the chosen path:
+- `Response style: <style> (client override)` — explicit value won
+- `Response style: <style> (auto)` — fell through to `pick_response_style`
+- `Response style: forced crisis (was <style>, severity=Red)` — safety
+  floor activated; the client (or auto-routing) picked a non-crisis style
+  on a Red question, and it was clamped
+
+This makes it easy to see in the stream whether a surprising tone came from
+auto-routing, an unexpected client value, or the safety floor.
+
+**Unknown values are safe:** if the client sends a typo or a style we've
+removed (`response_style: "casual"`), the server doesn't crash — the value
+fails the `in RESPONSE_STYLES` check and auto-routing takes over.
+
+### Why the rewrite step exists at all
+
+The grounded answer from `query_grounded` / `synthesizer` is fact-correct but
+often tonally neutral. Rewriting it lets us vary tone independently from
+retrieval — same facts, different presentation. The `factual` skip path
+means low-emotional questions don't pay the rewrite cost (~1 extra LLM
+call, ~100-300 ms latency).
+
+### Skipped paths
+
+- The two harm safety nodes (`refuse_harm_to_others`, `help_after_harm`)
+  bypass `apply_response_style` entirely — they produce already-styled
+  text via their own LLM prompts. Running a warm/supportive rewrite on
+  top of a refusal would soften it inappropriately.
+- The `factual` style is a no-op pass-through — no LLM call, just emits
+  `response_style: "factual"` so downstream debug tools can see what
+  happened.
+
+---
+
 ## Adding new content
 
 1. **New articles** — add source documents to the `hvaerinnafor` index using
@@ -463,9 +661,9 @@ professional help resources (e.g. Sex og samfunn).
 
 4. **New categories** — add to the `categories` list in `answer_utils.py`.
 
-5. **New topics** — update the severity classification prompt in
-   `analyze_query` (`agent_workflow_answer.py`) and the category list in
-   `registry.py` (`REFINE_AND_CLASSIFY` prompt).
+5. **New topics** — update the prompt and severity examples in
+   `ANALYZE_QUERY_PROMPT` ([registry.py](registry.py)) and the category
+   list passed in from `answer_utils.py`.
 
 ---
 
