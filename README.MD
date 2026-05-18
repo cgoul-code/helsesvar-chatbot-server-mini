@@ -392,6 +392,7 @@ worked examples per mode.
 | `references` | `[Title](url) \|\|IMG\|\| icon_url` per source |
 | `related queries` | JSON array of follow-up question suggestions |
 | `Refined query` | Rewritten version of the user's question |
+| `query_status` | JSON snapshot of the pipeline's classification + retrieval state — see [query_status payload](#query_status-payload) below |
 | `info` | Internal pipeline step names (for debugging) |
 | `systeminfo` | Citation verification details (for debugging) |
 | `Token usage` | Token counts and estimated NOK cost |
@@ -401,6 +402,59 @@ worked examples per mode.
 To use the **related-question fast path**, set `agent` to
 `hvaerinnafor_related_qa` and include `from_node_id` (the node ID from a
 previously emitted `related queries` item).
+
+#### `query_status` payload
+
+Emitted once per turn, near the end of the workflow inside
+`emit_query_answer_references` ([agent_workflow_answer.py](agent_workflow_answer.py)).
+Fires for **all** terminal paths — including the harm-routing branches
+(`refuse_harm_to_others`, `help_after_harm`), since both join back into
+`emit_query_answer_references` before END. This makes it the single,
+reliable signal for what classification the turn ended up with.
+
+The payload is a single JSON object delivered as `text` on the event:
+
+```json
+{
+  "refined_query": "Hvordan virker p-piller?",
+  "query_severity": "Green",
+  "stance": "info_seeker",
+  "harm_to_others_tense": "na",
+  "response_style": "factual",
+  "response_style_source": "auto",
+  "relevancy_band": "Strong",
+  "best_node_score": 0.812,
+  "response_set": true,
+  "validate_response_result": "Accepted"
+}
+```
+
+| Field | Source | Notes |
+|---|---|---|
+| `refined_query` | `analyze_query` | Rewritten search-friendly form of the user's question |
+| `query_severity` | `analyze_query` | `"Green"` / `"Yellow"` / `"Red"` / `""` |
+| `stance` | `analyze_query` | `"info_seeker"` / `"affected_party"` / `"harm_to_others"` / `"ambiguous"` |
+| `harm_to_others_tense` | `analyze_query` | `"planning"` / `"completed"` / `"unclear"` / `"na"`. `"na"` whenever stance ≠ `harm_to_others` |
+| `response_style` | `apply_response_style` | Final effective style — `"factual"` / `"warm"` / `"supportive"` / `"crisis"`. Empty string `""` when the rewrite step was bypassed (harm routes, Rejected turns, very short answers) |
+| `response_style_source` | `apply_response_style` | How the style was picked: `"auto"` (server auto-routed), `"override"` (client sent a valid `response_style`), `"forced_red"` (severity=Red safety floor clamped to `crisis`), or `""` (rewrite step skipped) |
+| `relevancy_band` | derived in `emit_query_answer_references` | `"Strong"` / `"Medium"` / `"Rejected"` — computed from the best retrieval score across all completed subqueries (`_classify_relevancy`). Empty `""` when no retrieval ran (e.g. harm routes) |
+| `best_node_score` | derived in `emit_query_answer_references` | `max(response_validity_index)` over the completed subqueries. `0.0` when no retrieval ran |
+| `response_set` | state | Boolean — `true` iff the LlamaIndex `Response` object on state is non-null. Useful as a "retrieval actually happened" signal |
+| `validate_response_result` | `synthesizer` / `fast_single` / harm nodes | `"Accepted"` when a grounded (or harm-routed) answer was produced, `"Rejected"` when the answer is a `CANNOT_ANSWER_PLACEHOLDER` |
+
+Typical use on the client: surface these fields behind a debug info-icon
+on each turn, classify test fixtures by stance/tense, or filter
+production logs for `validate_response_result == "Rejected"`. The HEI
+2.0 frontend wires this into a per-message popover; see
+[HeiChatClient.jsx](https://github.com/cgoul-code/chatbot-client-HEI20-v2/blob/main/client/src/HeiChatClient.jsx)
+for the `case 'query_status':` handler.
+
+Per-bucket behavior on harm routes:
+
+- `stance` will be `"harm_to_others"`, `harm_to_others_tense` set to `"planning"` / `"completed"` / `"unclear"`.
+- `validate_response_result` is `"Accepted"` — the safety nodes produce their own grounded-style text, they don't go through claim verification.
+- `response_style` / `response_style_source` are both `""` since `apply_response_style` is bypassed for harm routes.
+- `relevancy_band` is `""` and `best_node_score` is `0.0` — no retrieval was performed.
 
 ### `POST /examples`
 

@@ -167,6 +167,11 @@ class State_Answer(TypedDict):
     # Response-style. Tom streng = auto-rute via pick_response_style(). En
     # av RESPONSE_STYLES = klient-override som hopper over auto-routingen.
     response_style: str
+    # Hvordan response_style ble valgt: 'auto' (auto-routet), 'override'
+    # (klient sendte en gyldig stil), 'forced_red' (klamret til crisis pga
+    # Red-severity safety floor), eller '' (apply_response_style ble
+    # hoppet over – f.eks. harm-routing eller tomt svar).
+    response_style_source: Literal["auto", "override", "forced_red", ""]
     relevancy_band: str
     best_node_score: float
     response: Response | None
@@ -752,6 +757,7 @@ def analyze_query(state: State_Answer) -> Dict[str, Any]:
 
 
     # Vi skriver om query i state til renskrevet versjon
+    print(f'Severity: {plan.query_severity}, Stance: {plan.stance}, Needs subqueries: {plan.needs_subqueries}, Harm tense: {plan.harm_to_others_tense}')
     return {
         "refined_query": plan.refined_query,
         "needs_subqueries": plan.needs_subqueries,
@@ -772,7 +778,10 @@ def orchestrator(state: State_Answer) -> Dict[str, Any]:
         planner = llm.with_structured_output(SubQueries)
         report_queries: SubQueries = planner.invoke(prompt)
 
-        return {"subqueries": report_queries.subqueries}
+        return {
+            "subqueries": report_queries.subqueries,
+            "main_category": report_queries.main_category or "",
+        }
 
     except Exception as e:
         logging.error("Failed to execute orchestrator: %s", e)
@@ -1361,12 +1370,14 @@ def apply_response_style(state: State_Answer) -> Dict[str, Any]:
     override = (state.get("response_style") or "").strip()
     if override in RESPONSE_STYLES:
         style = override
+        source = "override"
         _emit(f"Response style: {style} (client override)", event="info")
     else:
         style = pick_response_style(
             state.get("query_severity", ""),
             state.get("stance", ""),
         )
+        source = "auto"
         _emit(f"Response style: {style} (auto)", event="info")
 
     # Safety floor: Red severity tvinger alltid 'crisis', også når klienten
@@ -1381,16 +1392,17 @@ def apply_response_style(state: State_Answer) -> Dict[str, Any]:
             event="info",
         )
         style = "crisis"
+        source = "forced_red"
 
     # Factual = skip rewrite, behold svaret som det er.
     if style == "factual":
-        return {"response_style": "factual"}
+        return {"response_style": "factual", "response_style_source": source}
 
     prompt_template = _STYLE_TO_PROMPT.get(style)
     if prompt_template is None:
         # Ukjent stil — burde ikke skje, men ikke krasj.
         logging.warning("Unknown response style %r, skipping rewrite", style)
-        return {"response_style": style}
+        return {"response_style": style, "response_style_source": source}
 
     try:
         prompt_value = prompt_template.format(answer=answer)
@@ -1400,6 +1412,7 @@ def apply_response_style(state: State_Answer) -> Dict[str, Any]:
         return {
             "final_answer": rewritten.content,
             "response_style": style,
+            "response_style_source": source,
             "input_tokens": in_tokens,
             "output_tokens": out_tokens,
         }
@@ -1409,10 +1422,38 @@ def apply_response_style(state: State_Answer) -> Dict[str, Any]:
 
 def emit_query_answer_references(state: State_Answer) -> Dict[str, Any]:
     """Emitter endelig svar + referanser som events."""
-    
+
     _emit( "Aggregating the final answer", event="info")
 
     try:
+        completed = state.get("completed_subqueries") or []
+        scores = [
+            float(getattr(sq, "response_validity_index", 0.0) or 0.0)
+            for sq in completed
+        ]
+        best_node_score = max(scores) if scores else 0.0
+        relevancy_band = _classify_relevancy(
+            best_node_score,
+            {"strong": 0.60, "medium": 0.55, "weak": 0.35},
+        ) if scores else ""
+
+        status_payload = json.dumps(
+            {
+                "refined_query": state.get("refined_query", ""),
+                "query_severity": state.get("query_severity", ""),
+                "stance": state.get("stance", ""),
+                "harm_to_others_tense": state.get("harm_to_others_tense", "na"),
+                "response_style": state.get("response_style", ""),
+                "response_style_source": state.get("response_style_source", ""),
+                "relevancy_band": relevancy_band,
+                "best_node_score": best_node_score,
+                "response_set": state.get("response") is not None,
+                "validate_response_result": state.get("validate_response_result", ""),
+            },
+            ensure_ascii=False,
+        )
+        _emit(status_payload, event="query_status")
+
         q = state.get("refined_query")
 
         _emit(q, event="Refined query")
@@ -1904,4 +1945,4 @@ builder.add_edge("related_queries_dialog_from_query", END)
 
 answer_workflow = builder.compile()
 from graph_utils import save_mermaid_diagram
-# save_mermaid_diagram(answer_workflow.get_graph())
+save_mermaid_diagram(answer_workflow.get_graph())

@@ -1,0 +1,20 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(find /c/Users/ChristianGoulignac/vscode/llama -maxdepth 4 -iname \"*.db\" -o -iname \"*.sqlite*\" 2>&1 | head -20)",
+      "Read(//c/Users/ChristianGoulignac/vscode/llama/**)",
+      "Bash(python -c \"import sqlite3; c = sqlite3.connect\\('ung_oss.sqlite'\\); cur = c.cursor\\(\\); cur.execute\\('SELECT name FROM sqlite_master WHERE type=\\\\\"table\\\\\"'\\); print\\([r[0] for r in cur.fetchall\\(\\)]\\)\")",
+      "Bash(python -c ' *)",
+      "Bash(python test/data/find_unanswered_questions.py --target 2 --max-candidates 5 --seed 1 --log \"\")",
+      "Read(//c/Users/CHRIST~1/AppData/Local/Temp/claude/c--Users-ChristianGoulignac-vscode-llama-llama-chatbot-server-mini/e58ea232-d5d6-4e93-9932-d4aaf339c34f/tasks/**)",
+      "Bash(PYTHONPATH=. PYTHONIOENCODING=utf-8 python -u test/data/find_unanswered_questions.py --target 2 --max-candidates 5 --seed 1 --log \"\")",
+      "Bash(PYTHONPATH=. PYTHONIOENCODING=utf-8 python -u test/data/find_unanswered_questions.py --target 50 --max-candidates 180 --seed 42 --out test/data/unanswered_questions.json --log test/data/unanswered_questions_log.json)",
+      "Bash(PYTHONPATH=. PYTHONIOENCODING=utf-8 python -u test/data/find_stance_questions.py --out test/data/stance_questions_smoke.json --log '' --target-info 2 --target-affected 2 --target-harm-planning 2 --target-harm-completed 1 --pool-info-affected 30 --pool-harm-seed 30 --seed 1)",
+      "Bash(PYTHONPATH=. PYTHONIOENCODING=utf-8 python -u test/data/find_stance_questions.py --out test/data/stance_questions.json --log test/data/stance_questions_log.json --target-info 50 --target-affected 50 --target-harm-planning 25 --target-harm-completed 25 --pool-info-affected 250 --pool-harm-seed 400 --seed 42)",
+      "Bash(PYTHONPATH=. PYTHONIOENCODING=utf-8 python -u test/data/find_stance_questions.py --out test/data/stance_smoke.json --log '' --target-info 2 --target-affected 2 --target-harm-planning 1 --target-harm-completed 0 --pool-info-affected 40 --pool-harm-seed 10 --seed 1 --verify-buckets info_seeker,affected_party)"
+    ],
+    "additionalDirectories": [
+      "c:\\Users\\ChristianGoulignac\\vscode\\llama\\chatbot-client-HEI20-v2\\client\\src"
+    ]
+  }
+}

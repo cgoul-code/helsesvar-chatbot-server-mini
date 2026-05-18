@@ -22,6 +22,9 @@ README_UTILS.md
 storage/*
 *.zip
 
+test/data/*.py
+
+
 # Python-specific exclusions
 __pycache__/
 *.pyc
