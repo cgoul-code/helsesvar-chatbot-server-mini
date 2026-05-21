@@ -9,7 +9,6 @@ class QuerySettings:
         self.similarity_top_k = int(kwargs.get('similarity_top_k', 10))  # Default to int, not str
         self.similarity_cutoff = float(kwargs.get('similarity_cutoff', 0.45))  # Default to float
         self.relevancy_cutoff = float(kwargs.get('relevancy_cutoff', 0.45))  # Default to float
-        self.psa_ssa_threshold = float(kwargs.get('psa_ssa_threshold', 0.65))    # cutoff for psa_ssa_topics tier-1 route; <=0 disables
         self.vectorIndex = kwargs.get('vectorIndex', "None")
         self.qa_bank_index = kwargs.get('qa_bank_index', None)  # explicit QA-bank override; None = use fallback chain
         # Optional client override for response style. "" = auto-route via
@@ -41,7 +40,6 @@ def get_query_settings(json_request):
         similarity_top_k=json_request.get('similarity_top_k', 10),
         similarity_cutoff=json_request.get('similarity_cutoff', 0.45),
         relevancy_cutoff=json_request.get('relevancy_cutoff', 0.45),
-        psa_ssa_threshold=json_request.get('psa_ssa_threshold', 0.65),
         vectorIndex=json_request.get('vectorIndex', "hvaerinnafor"),
         qa_bank_index=json_request.get('qa_bank_index', None),
         response_style=json_request.get('response_style', ""),

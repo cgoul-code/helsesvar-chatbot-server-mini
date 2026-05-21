@@ -143,9 +143,6 @@ class State_Answer(TypedDict):
     index_related_queries: VectorStoreIndex # QA-bank index
     retriever_related_queries: BaseRetriever
 
-    index_psa_ssa: Optional[VectorStoreIndex]      # tier-1 real Q&A index (may be None)
-    retriever_psa_ssa: Optional[BaseRetriever]     # tier-1 retriever (may be None)
-
     vector_index_description: str
     query: str
     conversation_str: str
@@ -153,7 +150,6 @@ class State_Answer(TypedDict):
     similarity_cutoff: float
     similarity_top_k: int
     relevancy_cutoff: float
-    psa_ssa_threshold: float     # cutoff for tier-1 psa_ssa_topics route
 
     ''' router / plan '''
     needs_subqueries: bool  # <--- NY
@@ -251,8 +247,6 @@ class WorkerState(TypedDict):
     similarity_cutoff: float
     query_engine: BaseQueryEngine
     retriever: BaseRetriever
-    retriever_psa_ssa: Optional[BaseRetriever]
-    psa_ssa_threshold: float
     llm: Any
     conversation_str: str
     query_severity: str
@@ -671,45 +665,6 @@ def _verify_claims(
 # Kategorier og relaterte spørsmål
 # ---------------------------------------------------------
 
-def _route_via_direct_qa(
-    query: str,
-    retriever: Optional[BaseRetriever],
-    threshold: float,
-) -> Tuple[List[Any], Optional[Dict[str, Any]]]:
-    """
-    Tier-1 route: query a Q&A index where each node already contains the
-    answer text. If the top hit's score >= threshold, return its retrieved
-    nodes as-is (they will be fed to the existing grounding pipeline as
-    context). Otherwise return ([], None).
-    """
-    if retriever is None or threshold <= 0.0:
-        print(f"No retriever or non-positive threshold for direct QA route, skipping. ret: {retriever}, threshold: {threshold}")
-        return [], None
-
-
-    try:
-        hits = retriever.retrieve(query) or []
-        if not hits:
-            print("Direct QA route: no hits retrieved.")
-            return [], None
-
-        top_score = max((float(getattr(h, "score", 0.0) or 0.0)) for h in hits)
-        if top_score < threshold:
-            print(f"Direct QA route: top score {top_score:.4f} below threshold {threshold:.4f}, skipping.")
-            return [], None
-
-        info = {
-            "top_score": top_score,
-            "n_nodes": len(hits),
-        }
-        print(f"Direct QA route: top score {top_score:.4f} meets threshold {threshold:.4f}, returning {len(hits)} nodes.")
-        return hits, info
-
-    except Exception as e:
-        logging.error("_route_via_direct_qa error: %s", e)
-        return [], None
-
-
 def _classify_relevancy(score: float, thresholds: Dict[str, float]) -> str:
     """
     thresholds: f.eks {"strong": 0.60, "medium": 0.45, "weak": 0.35}
@@ -813,8 +768,6 @@ def fast_single(state: State_Answer) -> Dict[str, Any]:
         "similarity_cutoff": state["similarity_cutoff"],
         "query_engine": state["query_engine"],
         "retriever": state["retriever"],
-        "retriever_psa_ssa": state.get("retriever_psa_ssa"),
-        "psa_ssa_threshold": float(state.get("psa_ssa_threshold", 0.65) or 0.0),
         "llm": state["llm"],
         "conversation_str": state.get("conversation_str", ""),
         "query_severity": state.get("query_severity", "Green"),
@@ -985,25 +938,9 @@ def query_grounded(state: WorkerState) -> Dict[str, Any]:
             "er relevant for spørsmålet.\n"
         )
 
-        # 1) Retrieval — 2-tier cascade
-        #    Tier 1: psa_ssa_topics (real ung.no Q&A, used directly as context)
-        #    Tier 2: article retriever (default)
-        psa_nodes, psa_info = _route_via_direct_qa(
-            query=question,
-            retriever=state.get("retriever_psa_ssa"),
-            threshold=float(state.get("psa_ssa_threshold", 0.65) or 0.0),
-        )
-        if psa_nodes:
-            print(f"Routed via psa_ssa_topics with top score {psa_info['top_score']:.3f} and {psa_info['n_nodes']} nodes")
-            _emit(
-                f"Routed via psa_ssa_topics (top_score={psa_info['top_score']:.3f}, "
-                f"nodes={psa_info['n_nodes']})",
-                event="info",
-            )
-            nodes = psa_nodes
-        else:
-            nodes = retriever.retrieve(question) or []
-            _emit(f"Routed via article retriever ({len(nodes)} nodes)", event="info")
+        # Retrieval
+        nodes = retriever.retrieve(question) or []
+        _emit(f"Retrieved {len(nodes)} nodes", event="info")
 
         thresholds = state.get("relevancy_thresholds", {
             "strong": 0.60,
@@ -1538,8 +1475,6 @@ def assign_workers(state: State_Answer) -> List[Send]:
                 "similarity_cutoff": state["similarity_cutoff"],
                 "llm": state["llm"],
                 "retriever": state["retriever"],
-                "retriever_psa_ssa": state.get("retriever_psa_ssa"),
-                "psa_ssa_threshold": float(state.get("psa_ssa_threshold", 0.65) or 0.0),
                 "conversation_str": state.get("conversation_str", ""),
                 "query_severity": state.get("query_severity", "Green"),
             },

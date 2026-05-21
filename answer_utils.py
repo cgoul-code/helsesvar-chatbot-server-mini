@@ -329,23 +329,6 @@ async def get_answer_as_stream(
         filters=severity_filters,
     )
 
-    # Tier-1 retrieval: real Q&A from ung.no (psa_ssa_topics).
-    # Loaded if available; the cascade in query_grounded skips it if missing
-    # or if the user is querying psa_ssa_topics directly.
-    index_psa_ssa = None
-    retriever_psa_ssa = None
-    if query_settings.vectorIndex != "psa_ssa_topics":
-        entry_psa_ssa = vector_store.get("psa_ssa_topics")
-        if entry_psa_ssa is not None:
-            index_psa_ssa = entry_psa_ssa.index
-            retriever_psa_ssa = index_psa_ssa.as_retriever(
-                similarity_top_k=5,
-                # No similarity_cutoff here — we apply psa_ssa_threshold ourselves
-                # in the cascade so we can decide based on the top score.
-            )
-        else:
-            logging.info("psa_ssa_topics index not loaded; tier-1 cascade disabled")
-         
     response_related_queries_synthesizer = get_response_synthesizer(
         response_mode= "tree_summarize",
         summary_template= text_rq_template, 
@@ -380,14 +363,11 @@ async def get_answer_as_stream(
         "conversation_str": conversation_str,
         "index_related_queries" :index_qa_bank,
         "retriever_related_queries" : retriever_related_queries,
-        "index_psa_ssa": index_psa_ssa,
-        "retriever_psa_ssa": retriever_psa_ssa,
 
         "from_node_id": query_settings.from_node_id,
         "similarity_cutoff": query_settings.similarity_cutoff,
         "similarity_top_k": query_settings.similarity_top_k,
         "relevancy_cutoff" : query_settings.relevancy_cutoff,
-        "psa_ssa_threshold": query_settings.psa_ssa_threshold,
 
         # defaults:
         "relevancy_band": "",

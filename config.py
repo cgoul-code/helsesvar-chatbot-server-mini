@@ -4,16 +4,14 @@ import os
 import logging
 import time
 import json
-from dotenv import load_dotenv
-from langchain_openai import AzureChatOpenAI
 from llama_index.core import (StorageContext, load_index_from_storage)
 from collections import namedtuple
 import asyncio
-from llama_index.core import Settings
-from llama_index.embeddings.azure_openai import AzureOpenAIEmbedding
-
 
 from dotenv import load_dotenv, find_dotenv
+
+from llm_provider import build_chat_llm
+from embeddings_provider import configure_embeddings
 
 load_dotenv(find_dotenv(), override=True)
 
@@ -28,24 +26,6 @@ def RunningLocally():
         print("Logging info locally")
         return True
     
-def configure_embeddings():
-    """
-    Configure LlamaIndex to use text-embedding-3-large for all query embeddings.
-    Prefers Azure if AZURE_OPENAI_* is set, else uses api.openai.com.
-    """
-
-    # Azure: make sure you created a deployment for text-embedding-3-large
-    # and put its *deployment name* in AZURE_OPENAI_EMBEDDINGS_DEPLOYMENT.
-    Settings.embed_model = AzureOpenAIEmbedding(
-        model=os.getenv('AZURE_OPENAI_EMBEDDINGS_MODEL'),
-        deployment_name=os.getenv("AZURE_OPENAI_EMBEDDINGS_DEPLOYMENT"),
-        api_key=os.getenv("AZURE_OPENAI_EMBEDDINGS_API_KEY"),
-        azure_endpoint=os.getenv("AZURE_OPENAI_EMBEDDINGS_ENDPOINT"),
-        api_version=os.getenv("AZURE_OPENAI_EMBEDDINGS_API_VERSION"),
-    )
-
-    
-
 # Class definitions
 class CustomError(Exception):
     def __init__(self, message, code):
@@ -118,38 +98,11 @@ vector_store = VectorIndexStore()
 VECTOR_INDEX_MAP = [
     {"name": "hvaerinnafor", "storage": ("." if RunningLocally() else "") +"/blobstorage/chatbot/hvaerinnafor", "description":"Forelskelse"},
     {"name": "hvaerinnafor_qa_bank", "storage": ("." if RunningLocally() else "") +"/blobstorage/chatbot/hvaerinnafor_qa_bank", "description":"Relaterte spørsmål"},
-    {"name": "psa_ssa_topics", "storage": ("." if RunningLocally() else "") +"/blobstorage/chatbot/psa_ssa_topics", "description":"spørsmål og svar fra ung.no om psa_ssa relaterte temaer"},
     {"name": "hvaerinnafor_unified", "storage": ("." if RunningLocally() else "") +"/blobstorage/chatbot/hvaerinnafor_unified", "description":"hvaerinnafor_unified is a single vector index that merges two content types: article chunks from the hvaerinnafor knowledge base, and ~7900 real Q&A entries from ung.no (last 12 months). Every node — regardless of source — exposes an answer-text field that the LLM sees, plus an embedding-only aliases field of question phrasings that shapes retrieval without leaking into the LLM prompt. For articles, aliases are 10 LLM-generated synthetic questions per chunk; for Q&A nodes, the original user question. At build time, real ung.no questions are additionally cross-pollinated onto the article chunks they best match (top-3, similarity ≥ 0.55, score-ranked). At query time, articles and Q&A compete in the same retrieval call — a chunk wins whether the user's wording resembles its raw text, a question its author imagined, or a question someone has actually asked."}
 ]
 
 
-# ChatGPT 5-mini
-#
-# LLMGPT4 = AzureChatOpenAI(
-#     #model=os.getenv('AZURE_OPENAI_MODEL'),
-#     #deployment_name=os.getenv('AZURE_OPENAI_DEPLOYMENT_NAME'),
-#     azure_deployment=os.getenv('AZURE_OPENAI_DEPLOYMENT_NAME'),
-#     api_version=os.getenv('AZURE_OPENAI_API_VERSION'),
-#     #api_key=os.getenv('AZURE_OPENAI_API_KEY'),
-#     azure_endpoint=os.getenv('AZURE_OPENAI_ENDPOINT'),
-#     timeout=120,
-#     reasoning_effort="minimal",
-#     verbose=True
-# )
-
-# ChatGPT4.1-mini
-#
-LLMGPT4 = AzureChatOpenAI(
-    azure_deployment=os.getenv('AZURE_OPENAI_DEPLOYMENT_NAME'),
-    api_version=os.getenv('AZURE_OPENAI_API_VERSION'),
-    api_key=os.getenv('AZURE_OPENAI_API_KEY'),
-    azure_endpoint=os.getenv('AZURE_OPENAI_ENDPOINT'),
-    timeout=120,
-    temperature = 0.0, 
-    verbose=False,
-)
-
-server_settings.set_llm(LLMGPT4)
+server_settings.set_llm(build_chat_llm())
 
 
 
