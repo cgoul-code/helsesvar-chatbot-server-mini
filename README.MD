@@ -197,6 +197,19 @@ merge the two node types; it just makes article chunks "speak user."
 At query time the top-K can return all-article, all-Q&A, or a mix — whichever
 embeddings rank highest.
 
+**Article-floor guarantee.** After retrieval, `query_grounded` runs
+`_ensure_article_in_top` ([agent_workflow_answer.py:410](agent_workflow_answer.py#L410))
+on the result before truncating to the LLM context. If the score-ordered top-N
+contains no `node_type=="article"` node but at least one article appears
+further down the retriever output (i.e. it cleared `similarity_cutoff`), the
+lowest-ranked `node_type=="qa"` node in the top-N is swapped out for the
+highest-ranked article. This keeps the grounding set from collapsing to
+Q&A-only on queries where article phrasing happens to lose the embedding race,
+while preserving the highest-scoring Q&A signal. If no article qualifies the
+behavior is unchanged (pure score order); in Art mode the rule is a no-op
+since every node is an article. A `systeminfo` event
+`"Article promoted into top-N …"` is emitted when the swap actually fires.
+
 ### Choosing a mode
 
 | If you want… | Use |
