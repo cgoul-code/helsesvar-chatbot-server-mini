@@ -403,6 +403,45 @@ def _node_identity(n: Any) -> str:
     )
 
 
+def _node_meta(n: Any) -> Dict[str, Any]:
+    node = getattr(n, "node", n)
+    return getattr(node, "metadata", {}) or {}
+
+
+def _ensure_article_in_top(nodes: List[Any], top_n: int) -> List[Any]:
+    """Sørg for at minst én artikkel-node er med i topp-N hvis en kvalifiserer.
+
+    I unified-indeksen ('Hyb' mode) konkurrerer article- og qa-noder i samme
+    retrieval. Hvis topp-N er ren qa, men minst én artikkel finnes lenger
+    ned i lista (dvs. har klart similarity_cutoff), byttes den lavest-
+    rangerte qa-noden i topp-N ut med den høyest-rangerte artikkelen.
+    Hvis det ikke finnes noen qa å bytte ut, legges artikkelen til.
+    """
+    if not nodes:
+        return list(nodes)
+
+    top = list(nodes[:top_n])
+    if any(_node_meta(n).get("node_type") == "article" for n in top):
+        return top
+
+    best_article = next(
+        (n for n in nodes if _node_meta(n).get("node_type") == "article"),
+        None,
+    )
+    if best_article is None:
+        return top
+
+    qa_positions = [
+        i for i, n in enumerate(top)
+        if _node_meta(n).get("node_type") == "qa"
+    ]
+    if qa_positions:
+        top[qa_positions[-1]] = best_article
+    else:
+        top.append(best_article)
+    return top
+
+
 # ---------------------------------------------------------
 # Validering av sitater og påstander
 # ---------------------------------------------------------
@@ -1001,8 +1040,14 @@ def query_grounded(state: WorkerState) -> Dict[str, Any]:
 
         # 3) Begrens hvor mange noder vi bruker videre
         #    - få noder gir mye mindre prompt + raskere sitat-sjekk
-        nodes_for_context = nodes[:MAX_NODES_FOR_CONTEXT]
-        nodes_for_verification = nodes[:MAX_NODES_FOR_VERIFICATION]
+        #    - garanter minst én artikkel i konteksten hvis en kvalifiserer
+        original_top = nodes[:MAX_NODES_FOR_CONTEXT]
+        nodes_for_context = _ensure_article_in_top(nodes, MAX_NODES_FOR_CONTEXT)
+        nodes_for_verification = _ensure_article_in_top(nodes, MAX_NODES_FOR_VERIFICATION)
+
+        if any(_node_meta(n).get("node_type") == "article" for n in nodes_for_context) \
+                and not any(_node_meta(n).get("node_type") == "article" for n in original_top):
+            _emit("Article promoted into top-N (was qa-only by score)", event="info")
 
         ctx = _format_context_from_nodes(nodes_for_context)
         prompt_value = GROUNDED_PROMPT.format(
