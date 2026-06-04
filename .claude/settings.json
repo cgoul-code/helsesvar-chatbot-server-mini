@@ -1,0 +1,10 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(python -c 'import ast *)",
+      "Bash(node -e \"const b=require\\('@babel/core'\\); b.transformFileSync\\('src/HeiChatClientV2.jsx',{presets:[['@babel/preset-react']]}\\); console.log\\('JSX parse OK'\\);\")",
+      "Bash(node -e \"require\\('@babel/core'\\).transformFileSync\\('src/HeiChatClientV2.jsx',{presets:[['@babel/preset-react']]}\\); console.log\\('JSX parse OK'\\);\")",
+      "Bash(python -c ' *)"
+    ]
+  }
+}

@@ -1,198 +1,202 @@
 [
   {
     "question": "Kan man få fri fra jobb som lærling for kjøretimer? Kan man kreve fri for dette?",
-    "rejected": true
+    "expected_answer": "IKKE_SVAR"
   },
   {
     "question": "Hei! Jeg skal begynne med å ta lett mc lappen (A1) men lurer på hvor lang tid det vil ta før jeg får det. Har bestilt grunnkurs 8 april. Hørt at oppkjøringa tar lengst tid å få time. Hvor lang tid tar det før jeg får ta oppkjøringa/lappen?",
-    "rejected": true
+    "expected_answer": "IKKE_SVAR"
   },
   {
     "question": "Hei ung.no Skolen har bestemt at det er bedre om jeg ikke har noen karakter men jeg har bestått/ikke bestått, lurer på hvis landene i utlandet godkjent meg fordi har hørt landene hsr mer fokus på karater.",
-    "rejected": true
+    "expected_answer": "IKKE_SVAR"
   },
   {
     "question": "Hei, jeg lurte på om det egt er lov at offentlige skoler bestemmer hvilke klær man kan ha på. Feks er det lov å banne russegenser. Forstår at det finnes klær som er upassende. Men en hettegenser og joggebukse er ikke upassende?",
-    "rejected": true
+    "expected_answer": "IKKE_SVAR"
   },
   {
     "question": "Hei Kan jeg ta opp kun nynorsk eksamen fra vg3 som privatist for å forbedre snittkarakteren i norskfaget? Dvs at jeg ikke trenger å ta opp igjen hovedmål eller muntlig?",
-    "rejected": true
+    "expected_answer": "IKKE_SVAR"
   },
   {
     "question": "Kan jeg bli proff i roing som Nils Jackob Hoff Hvis jeg begynner med roing nå som 13 åring? 14 om 2 månder. Hei jeg har lyst å begynne med roing og har lyst å bli god i det men er det forsent?",
-    "rejected": true
+    "expected_answer": "IKKE_SVAR"
   },
   {
     "question": "Hvor mye koster lappen på moped bil til sammen?",
-    "rejected": true
+    "expected_answer": "IKKE_SVAR"
   },
   {
     "question": "Hei, har lyst til og kjøpe en dji avata, men ser at for og ta drone sertifikatet må jeg være 16. Er det mulig og kjøpe drone nå og bare fly på fjell langt unna folk til jeg blir 16 og kan ta sertifikatet?",
-    "rejected": true
+    "expected_answer": "IKKE_SVAR"
   },
   {
     "question": "Hva må man ha i snitt for å bli fisker?",
-    "rejected": true
+    "expected_answer": "IKKE_SVAR"
   },
   {
     "question": "Vet ikke hvilket tema dette er… men jeg har nettop kjøpt ny dunjakke, er redd for kjemikalier… må man vaske ny jakke? Og hva slags kjemikalier har ny jakke i seg?",
-    "rejected": true
+    "expected_answer": "IKKE_SVAR"
   },
   {
     "question": "hei Jeg er en gutt 15-åring og lurer på om hvordan kan jeg få tatt trafikalt grunnkurs i 10.klasse. hvordan kan jeg gjør det?",
-    "rejected": true
+    "expected_answer": "IKKE_SVAR"
   },
   {
     "question": "Hei! Hva betyr forskuddstrekk?? Kunne du forklart på en enkel måte? På lønnsslippen min stod det for eksempel forskuddstrekk -19 233,00 ... det er vel ikke penger jeg skal betale tilbake eller er det penger jeg har skatter til nå i år?? Slike ting forvirret meg..",
-    "rejected": true
+    "expected_answer": "IKKE_SVAR"
   },
   {
     "question": "Er redd for at stråling fra telefon iPad å pc kan krympe tissen min eller få den til og stoppe å vokse skjer det? Eller kan eg bli steril eg trenger hjemp",
-    "rejected": true
+    "expected_answer": "IKKE_SVAR"
   },
   {
     "question": "Jeg går nå på melleva ppiller og vurderer å bytte til en Yasmin variant ettersom jeg sliter med trøblete hud. Hvilke fordeler ulemper har Yasmin pillen kontra melleva? Og er det slik at man fortsatt har mensen på Yasmin?",
-    "rejected": true
+    "expected_answer": "IKKE_SVAR"
   },
   {
     "question": "Hei. Jeg har brukt ca 35 000 av skattekortet mitt, så begynte jeg å skatte 10%. kommer til å tjene ca 100 000 i år. Får jeg igjen noe på skatten neste år? Isåfall hvor mye?",
-    "rejected": true
+    "expected_answer": "IKKE_SVAR"
   },
   {
     "question": "Hei, jeg er 15 år og skal ta tafikalt-grunnkurs for øvelseskjøring. Men jeg lurer på en ting, må man ta noen prøver på det grunnkurset?",
-    "rejected": true
+    "expected_answer": "IKKE_SVAR"
   },
   {
     "question": "hei, jeg lurer på når kan man begynne å kjøre moped igjen? er det starten av april?",
-    "rejected": true
+    "expected_answer": "IKKE_SVAR"
   },
   {
     "question": "Jeg ønsker og bli skogsmaskinfører og kjøre lastbærer. Hvilke utdanning MÅ jeg ha.",
-    "rejected": true
+    "expected_answer": "IKKE_SVAR"
   },
   {
     "question": "Hei! Har et uformelt jobb intervju på fredag va kan jeg forvente og bli spurt og er det noe jeg kan forberede meg til?",
-    "rejected": true
+    "expected_answer": "IKKE_SVAR"
   },
   {
     "question": "Kan jeg sove med bh? Eller er det skadelig???",
-    "rejected": true
+    "expected_answer": "IKKE_SVAR"
   },
   {
     "question": "Hei. Jeg er 13 og drikker 3 liter vann hver dag. Er det for mye? Liker å drikke mye vann, men er det sunt?",
-    "rejected": true
+    "expected_answer": "IKKE_SVAR"
   },
   {
     "question": "Har jeg lov å kjøre traktor hvis jeg kjører på privat eiendom uten å tatt trafikalt? Jeg er15 år",
-    "rejected": true
+    "expected_answer": "IKKE_SVAR"
   },
   {
     "question": "Hei! Hvis en 0,5 liter Ananasbrus er det eneste usunne jeg spiser/drikker hver dag. Kun det og normal mat. Er jeg da forsatt usunn?",
-    "rejected": true
+    "expected_answer": "IKKE_SVAR"
   },
   {
     "question": "Kan man bli kvitt epilepsi?",
-    "rejected": true
+    "expected_answer": "IKKE_SVAR"
   },
   {
     "question": "Jeg bare lurte på om man kan få aper i Norge, Jeg leste at man måtte ha en spesiell tillatelse, men hvordan får man den?",
-    "rejected": true
+    "expected_answer": "IKKE_SVAR"
   },
   {
     "question": "Hei jeg søkte arbeidsavklaringspenger penger, jeg he aldri jobbet før jeg ble syk. Hvor mye for man i mnd da?",
-    "rejected": true
+    "expected_answer": "IKKE_SVAR"
   },
   {
     "question": "Kompetansebevis gir studiepoeng? hvor mye?",
-    "rejected": true
+    "expected_answer": "IKKE_SVAR"
   },
   {
     "question": "Fikk nettopp vite at jeg kanskje har CFS eller ME (kronisk utmattelsessyndrom) Hva skjer hvis jeg med (CFS/ME) sliter meg helt ut. Og ikke lytter til kroppen.",
-    "rejected": true
+    "expected_answer": "IKKE_SVAR"
   },
   {
     "question": "Hei. Kan jeg søke på luftfart og statsvitenskap samtidig. Det vil si kan jeg studere tu ulike studier samtidig. Dersom ikke. Hva er alternativer, Fordi jeg liker begge utrolig mye og jeg vil gjerne studere politikk og bli pilot.",
-    "rejected": true
+    "expected_answer": "IKKE_SVAR"
   },
   {
     "question": "Hei, jeg går byggfag Vg2 og har problemer med Norsk lærer, kan jeg ta opp norsk som privatist og ikke ha norsk på skolen?",
-    "rejected": true
+    "expected_answer": "IKKE_SVAR"
   },
   {
     "question": "Hei jeg er en gutt som er i Dubai i ferie. Kan jeg komme tilbake til Norge eller grensene å flyplassene er stengt? Jeg er norsk statsborger!",
-    "rejected": true
+    "expected_answer": "IKKE_SVAR"
   },
   {
     "question": "Kan man få 6 karakterer i norsk på vitnemålet? Fikk beskjed fra norsklærer om at dette er mulig, men nynorsk teller vel ikke som programfag. Dette betyr at det kun burde være mulig å ha 5 karakterer maksimal på vitnemålet?",
-    "rejected": true
+    "expected_answer": "IKKE_SVAR"
   },
   {
     "question": "jeg spilte veldig bra en fotballkamp, men når jeg skal sjekke min fotball om det sto at jeg hadde deilige taklinger, så sto det ikke det. nå tror alle jeg er dårlig fordi man kan ikke se at jeg gjør det bra på min fotball.",
-    "rejected": true
+    "expected_answer": "IKKE_SVAR"
   },
   {
     "question": "Hei jeg er en gutt på 15 som har en moped på min fars navn og lurte bare på om det er noe sted det er lov for meg å kjøre den lovelig har brukt tid på å pusse den opp og hadde vært gøy å kjørt den et lovelig sted. 😊",
-    "rejected": true
+    "expected_answer": "IKKE_SVAR"
   },
   {
     "question": "Jeg bestilte klær fra boohoo og vil sende noen av klærne tilbake. Men det står at jeg eventuelt må betale toll for å sende den tilbake til england. Hvordan virker det?",
-    "rejected": true
+    "expected_answer": "IKKE_SVAR"
   },
   {
     "question": "Hei Jeg har lyst til å studere i Norge, men har egentlig engelsk som morsmål. Er det noen utdanninger i Norge som tilbyr undervisning på engelsk? Helst bachelor eller master.",
-    "rejected": true
+    "expected_answer": "IKKE_SVAR"
   },
   {
     "question": "Kan man ha flere skole på venteliste?",
-    "rejected": true
+    "expected_answer": "IKKE_SVAR"
   },
   {
     "question": "Er det vanlig/lov med tilfeldig ruskontroll? Kan politiet benytte spyttprøver under en vanlig trafikkontroll, uten att det er mistanke om rus, eller blir det benytta KUN når det er mistanke om att føreren e ruspåvirket?",
-    "rejected": true
+    "expected_answer": "IKKE_SVAR"
   },
   {
     "question": "Hei. Jeg går vg1 tek og lurer på om det er mulig å gå vg2 elenergi og avkom, for å da bli elektriker offshore? Hvis ikke, er det en anna mulighet for å bli elektriker offshore utenom å ha gått elektro på vgs?",
-    "rejected": true
+    "expected_answer": "IKKE_SVAR"
   },
   {
     "question": "Hei! Jeg har gått på p-piller i kanskje to år nå. Men jeg glemmer ofte å ta pillene og sliter med mensensmerter. Jeg snakket med en som bruker p-plaster og hun anbefaler det. Men hvor mye koster det? Jeg har frikort, så slipper jeg å betale da?",
-    "rejected": true
+    "expected_answer": "IKKE_SVAR"
   },
   {
     "question": "Hei! Jeg lurer på noe. Dersom man får påspandert reise eller måltid eller får mat av noen andre, regnes dette som gave i skattemeldingen?",
-    "rejected": true
+    "expected_answer": "IKKE_SVAR"
   },
   {
     "question": "Er det trygt å ta kreatin. Jeg føler at det er dop og gjør deg svakere ogg dårligre",
-    "rejected": true
+    "expected_answer": "IKKE_SVAR"
   },
   {
     "question": "Hei Jeg har bodd i usa i noen år og tok derfor lappen da jeg var 17 år i usa. Nå er jeg 19 og flytter hjem snart. Kan jeg overføre lappen eller må jeg gjøre alt på nytt her?",
-    "rejected": true
+    "expected_answer": "IKKE_SVAR"
   },
   {
     "question": "Hei, jeg tar førerkortet nå. Det kommer mange obligatoriske timer og jeg er usikker på om noen er obligatoriske eller ikke, jeg fant ingenting i nettet. Er forbikjørings timene under trinn 3 obligatorisk? Kan man få fravær for det?",
-    "rejected": true
+    "expected_answer": "IKKE_SVAR"
   },
   {
     "question": "Hva er lovene med Confederate flagget?",
-    "rejected": true
+    "expected_answer": "IKKE_SVAR"
   },
   {
     "question": "Hvilken øvelser kan jeg gjøre for å få mer slanke lår?",
-    "rejected": true
+    "expected_answer": "IKKE_SVAR"
   },
   {
     "question": "Hei, hvor lang tid tar det ca å gå fra mantits til sixpack? Og ikke minst, hva må til for å få til dette? Takk på forhånd!",
-    "rejected": true
+    "expected_answer": "IKKE_SVAR"
+  },
+  {
+    "question": "Jeg har nå fått et bankkort (Ungdoms-kort), så nå kan jeg kjøpe ting på nettet. Men hva er aldersgrensen på å selge og kjøpe ting på FINN.no uten en voksen?",
+    "expected_answer": "IKKE_SVAR"
   },
   {
     "question": "Hvilken utdanning burde man velge vis jeg ikke vet hva jeg vil bli?",
-    "rejected": true
+    "expected_answer": "IKKE_SVAR"
   },
   {
     "question": "Hei, jeg lurer på om det er mulig å ta konduktøropplæring på deltid hvis man også studerer samtidig?",
-    "rejected": true
+    "expected_answer": "IKKE_SVAR"
   }
 ]

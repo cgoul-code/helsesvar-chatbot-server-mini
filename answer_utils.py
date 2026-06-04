@@ -1,4 +1,3 @@
-from llama_index_client import FilterOperator
 from agent_workflow_answer import (answer_workflow, State_Answer)
 from agent_workflow_qa import (related_qa_workflow, State_Related)
 from config import ServerSettings, VectorIndexStore, CustomError
@@ -23,6 +22,16 @@ from llama_index.core.postprocessor import SimilarityPostprocessor
 # answer-retrieval index name (e.g. "hvaerinnafor_unified") and reuse the
 # original question bank for follow-up suggestions regardless.
 QA_BANK_FALLBACK_NAME = "hvaerinnafor_qa_bank"
+
+# /examples reads its categories and example questions from the QA-bank: each
+# node's text IS a real user question and its metadata carries the category
+# labels it belongs to. (The hvaerinnafor article index only has article text,
+# which is why pulling examples from there showed article titles, not questions.)
+EXAMPLES_INDEX_NAME = "hvaerinnafor_qa_bank"
+
+# Category labels (lower-cased) that must never become a topic card. "Ukjent"
+# is the classifier's no-match fallback (registry.py), not a real topic.
+EXCLUDED_CATEGORIES = {"ukjent"}
 
 
 def _resolve_qa_bank_entry(query_settings, vector_store):
@@ -54,7 +63,9 @@ def _resolve_qa_bank_entry(query_settings, vector_store):
     if QA_BANK_FALLBACK_NAME != name:
         fallback = vector_store.get(QA_BANK_FALLBACK_NAME)
         if fallback is not None:
-            logging.warning(
+            # Expected path in Hyb mode: hvaerinnafor_unified has no own _qa_bank,
+            # so the fallback is by design, not a fault. Keep at INFO to avoid noise.
+            logging.info(
                 "QA-bank %s not found; using %s as fallback for related-queries.",
                 name, QA_BANK_FALLBACK_NAME,
             )
@@ -221,7 +232,7 @@ async def get_answer_as_stream(
 
     index: VectorStoreIndex = entry.index
     vector_index_description = entry.description
-    logging.info("Found entry: %s", vector_index_description)
+    #logging.info("Found entry: %s", vector_index_description)
     
     # 1.1 Load the qa_bank corresponding to the index
     vec_name_qa_bank, entry_qa_bank = _resolve_qa_bank_entry(query_settings, vector_store)
@@ -372,7 +383,6 @@ async def get_answer_as_stream(
         # defaults:
         "relevancy_band": "",
         "best_node_score": 0.0,
-        "response": None,
         "validate_response_result": "Rejected",
         "answer": "",
         "feedback": "",
@@ -390,6 +400,9 @@ async def get_answer_as_stream(
         "stance": "",
         "harm_to_others_tense": "na",
         "response_style": query_settings.response_style,
+        "claims_valid_threshold": getattr(query_settings, "claims_valid_threshold", 1.0),
+        "entailment_check": getattr(query_settings, "entailment_check", True),
+        "debug_emit_nodes": getattr(query_settings, "debug_emit_nodes", False),
     }
 
 
@@ -575,68 +588,6 @@ def _pick_unique_random(items: List[Dict[str, Any]], k: int) -> List[Dict[str, A
         return deduped
     return random.sample(deduped, k)
 
-def _split_joined_category(value: str) -> List[str]:
-    """
-    Supports:
-      "A"     -> ["A"]
-      "A|B"   -> ["A", "B"]
-      "|A|B|" -> ["A", "B"]
-    """
-    if not isinstance(value, str):
-        return []
-    s = value.strip()
-    if not s:
-        return []
-    return [p.strip() for p in s.split("|") if p.strip()]
-async def _discover_categories_from_qabank(index_qa_bank: VectorStoreIndex) -> List[str]:
-    cats = set()
-
-    sc = getattr(index_qa_bank, "storage_context", None)
-    ds = getattr(sc, "docstore", None) if sc else None
-    docs_dict = getattr(ds, "docs", None) if ds else None
-
-    if not isinstance(docs_dict, dict):
-        return []
-
-    for doc in docs_dict.values():
-        meta = getattr(doc, "metadata", None) or {}
-
-        raw_list = meta.get("categories")
-        if isinstance(raw_list, list):
-            for x in raw_list:
-                s = str(x).strip()
-                if s:
-                    cats.add(s)
-
-        raw = meta.get("category")
-        if isinstance(raw, str) and raw.strip():
-            for part in [p.strip() for p in raw.split("|") if p.strip()]:
-                cats.add(part)
-
-        raw2 = meta.get("main_category")
-        if isinstance(raw2, str) and raw2.strip():
-            cats.add(raw2.strip())
-
-    return sorted(cats)
-
-
-def _meta_has_category(meta: dict, cat_title: str) -> bool:
-    cat_title = (cat_title or "").strip()
-    if not cat_title:
-        return False
-
-    # categories: list of up to 3 categories
-    cats = meta.get("categories")
-    if isinstance(cats, list) and any(str(x).strip() == cat_title for x in cats):
-        return True
-
-    # category: hovedkategori (single string)
-    hoved = meta.get("category")
-    if isinstance(hoved, str) and hoved.strip() == cat_title:
-        return True
-
-    return False
-
 def _meta_is_valid(meta: dict) -> bool:
     v = (meta or {}).get("valid", True)  # default True if missing (change if you prefer)
     if isinstance(v, bool):
@@ -650,7 +601,115 @@ def _meta_is_valid(meta: dict) -> bool:
 # ------------------------------
 # NEW AGENT: /examples (one response, full list)
 # ------------------------------
-from llama_index.core.vector_stores import MetadataFilter, MetadataFilters, FilterOperator
+
+# ------------------------------
+# Examples cache
+# ------------------------------
+# Building the /examples payload means, for every category in the QA-bank,
+# running a top-200 semantic retrieval (one embedding call + vector search
+# per category). That is the slow part, and both the category list and the
+# candidate pools are static for the lifetime of a loaded index. So we
+# precompute the pools once per QA-bank index and keep them in memory; each
+# request then only does a cheap random pick. warm_examples_cache() primes
+# this at server startup so the first /examples call is already fast.
+#
+# Cache shape:  {qa_bank_index_name: {"categories": [...], "pools": {title: [items]}}}
+_examples_cache: Dict[str, Dict[str, Any]] = {}
+_examples_cache_lock = asyncio.Lock()
+
+
+def _node_category_labels(meta: dict) -> List[str]:
+    """All category labels a QA-bank node is tagged with (excl. EXCLUDED)."""
+    labels: set[str] = set()
+
+    raw_list = meta.get("categories")
+    if isinstance(raw_list, list):
+        for x in raw_list:
+            labels.add(str(x).strip())
+
+    raw = meta.get("category")
+    if isinstance(raw, str):
+        for part in raw.split("|"):
+            labels.add(part.strip())
+
+    raw2 = meta.get("main_category")
+    if isinstance(raw2, str):
+        labels.add(raw2.strip())
+
+    return [l for l in labels if l and l.lower() not in EXCLUDED_CATEGORIES]
+
+
+def _build_examples_pools(index_qa_bank: VectorStoreIndex) -> Dict[str, Any]:
+    """Bucket QA-bank questions by category, straight from the docstore.
+
+    Each QA-bank node's text IS a real user question, and its metadata lists
+    the categories it belongs to. We walk the docstore once and append every
+    valid node's question to each of its categories' pools — so a card only
+    ever shows questions that genuinely belong to it. No embeddings/retrieval:
+    a plain in-memory scan, which is what makes it fast.
+    """
+    sc = getattr(index_qa_bank, "storage_context", None)
+    ds = getattr(sc, "docstore", None) if sc else None
+    docs_dict = getattr(ds, "docs", None) if ds else None
+
+    pools: Dict[str, List[Dict[str, Any]]] = {}
+    if not isinstance(docs_dict, dict):
+        return {"categories": [], "pools": pools}
+
+    for node in docs_dict.values():
+        meta = getattr(node, "metadata", None) or {}
+        if not _meta_is_valid(meta):
+            continue
+        item = _node_to_query_and_id(node)
+        if not item:
+            continue
+        for label in _node_category_labels(meta):
+            pools.setdefault(label, []).append(item)
+
+    return {"categories": sorted(pools.keys()), "pools": pools}
+
+
+async def _get_examples_cache_entry(
+    vec_name: str, index_qa_bank: VectorStoreIndex, force: bool = False
+) -> Dict[str, Any]:
+    """Return the cached {categories, pools} for *vec_name*, building if cold."""
+    if not force:
+        cached = _examples_cache.get(vec_name)
+        if cached is not None:
+            return cached
+    async with _examples_cache_lock:
+        # Re-check inside the lock so concurrent first-hits build only once.
+        cached = _examples_cache.get(vec_name)
+        if cached is not None and not force:
+            return cached
+        logging.info("Building examples cache for %s ...", vec_name)
+        entry = _build_examples_pools(index_qa_bank)
+        _examples_cache[vec_name] = entry
+        logging.info(
+            "Examples cache for %s ready: %d categories", vec_name, len(entry["categories"])
+        )
+        return entry
+
+
+async def warm_examples_cache(vector_store: VectorIndexStore) -> None:
+    """Precompute the examples pools for the QA-bank.
+
+    /examples reads only EXAMPLES_INDEX_NAME (hvaerinnafor_qa_bank), so that
+    is the only index we need here. Called once at server startup (after
+    indexes load) so the first /examples request is fast. Safe to call
+    repeatedly — it rebuilds the entry.
+    """
+    entry = vector_store.get(EXAMPLES_INDEX_NAME)
+    if entry is None:
+        logging.warning(
+            "Cannot warm examples cache: index %s not loaded.", EXAMPLES_INDEX_NAME
+        )
+        return
+    try:
+        await _get_examples_cache_entry(entry.name, entry.index, force=True)
+    except Exception:
+        logging.exception("Failed to warm examples cache for %s", entry.name)
+
 
 async def get_examples_full_as_stream(
     query_settings: QuerySettings,
@@ -660,21 +719,26 @@ async def get_examples_full_as_stream(
     logging.info("------------->>get_examples_full_as_stream")
 
     try:
-        vec_name_qa_bank, entry_qa_bank = _resolve_qa_bank_entry(query_settings, vector_store)
-        if entry_qa_bank is None:
-            logging.error("Index not found: %s (and no fallback)", vec_name_qa_bank)
+        entry_index = vector_store.get(EXAMPLES_INDEX_NAME)
+        if entry_index is None:
+            logging.error("Index not found: %s", EXAMPLES_INDEX_NAME)
             raise CustomError(
-                f"Index not found, referansefilene for {vec_name_qa_bank} mangler!",
+                f"Index not found, referansefilene for {EXAMPLES_INDEX_NAME} mangler!",
                 404
             )
 
-        index_qa_bank: VectorStoreIndex = entry_qa_bank.index
+        index_examples: VectorStoreIndex = entry_index.index
+
+        # Always serve from the precomputed pools (built lazily if cold).
+        entry = await _get_examples_cache_entry(EXAMPLES_INDEX_NAME, index_examples)
+        pools: Dict[str, List[Dict[str, Any]]] = entry["pools"]
 
         requested = getattr(query_settings, "requested_categories", None)
         if isinstance(requested, list) and requested:
+            # Explicit subset — keep only the requested categories.
             categories_to_use = [str(x).strip() for x in requested if str(x).strip()]
         else:
-            categories_to_use = await _discover_categories_from_qabank(index_qa_bank)
+            categories_to_use = entry["categories"]
 
         if not categories_to_use:
             yield {"event": "examples_categories", "items": []}
@@ -683,51 +747,14 @@ async def get_examples_full_as_stream(
 
         out: List[Dict[str, Any]] = []
 
-        # Optional: try to pre-filter by metadata.valid == True in the retriever
-        # (Some vector stores support this, others ignore/raise — we handle safely.)
-        valid_filters = MetadataFilters(
-            filters=[MetadataFilter(key="valid", value=1, operator=FilterOperator.EQ)]
-        )
-
         for cat_title in categories_to_use:
             cat_title = (cat_title or "").strip()
             if not cat_title:
                 continue
 
-            mapped: List[Dict[str, Any]] = []
+            mapped = pools.get(cat_title) or []
 
-            # --- Retrieve a big pool ---
-            try:
-                try:
-                    # Try retriever-level filter (best if supported)
-                    retriever = index_qa_bank.as_retriever(
-                        similarity_top_k=200,
-                        similarity_cutoff=0.0,
-                        filters=valid_filters,
-                    )
-                except TypeError:
-                    # Older versions / stores that don't accept filters here
-                    retriever = index_qa_bank.as_retriever(
-                        similarity_top_k=200,
-                        similarity_cutoff=0.0,
-                    )
-
-                results = await retriever.aretrieve(cat_title)
-
-            except Exception:
-                logging.exception("Retriever failed for category=%r", cat_title)
-                results = []
-
-            # --- Post-filter strictly (always) ---
-            for nws in results or []:
-                node = getattr(nws, "node", None)
-                if node is None:
-                    continue
-
-                item = _node_to_query_and_id(nws)
-                if item:
-                    mapped.append(item)
-
+            # Random pick stays per-request so examples still vary between calls.
             picked = _pick_unique_random(mapped, 3)
 
             out.append({

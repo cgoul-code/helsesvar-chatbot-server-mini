@@ -23,6 +23,7 @@ storage/*
 *.zip
 
 test/data/*.py
+test/results/*
 
 
 # Python-specific exclusions

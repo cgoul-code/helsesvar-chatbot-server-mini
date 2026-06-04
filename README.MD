@@ -403,7 +403,6 @@ The payload is a single JSON object delivered as `text` on the event:
   "response_style_source": "auto",
   "relevancy_band": "Strong",
   "best_node_score": 0.812,
-  "response_set": true,
   "validate_response_result": "Accepted"
 }
 ```
@@ -418,7 +417,6 @@ The payload is a single JSON object delivered as `text` on the event:
 | `response_style_source` | `apply_response_style` | How the style was picked: `"auto"` (server auto-routed), `"override"` (client sent a valid `response_style`), `"forced_red"` (severity=Red safety floor clamped to `crisis`), or `""` (rewrite step skipped) |
 | `relevancy_band` | derived in `emit_query_answer_references` | `"Strong"` / `"Medium"` / `"Rejected"` — computed from the best retrieval score across all completed subqueries (`_classify_relevancy`). Empty `""` when no retrieval ran (e.g. harm routes) |
 | `best_node_score` | derived in `emit_query_answer_references` | `max(response_validity_index)` over the completed subqueries. `0.0` when no retrieval ran |
-| `response_set` | state | Boolean — `true` iff the LlamaIndex `Response` object on state is non-null. Useful as a "retrieval actually happened" signal |
 | `validate_response_result` | `synthesizer` / `fast_single` / harm nodes | `"Accepted"` when a grounded (or harm-routed) answer was produced, `"Rejected"` when the answer is a `CANNOT_ANSWER_PLACEHOLDER` |
 
 Typical use on the client: surface these fields behind a debug info-icon

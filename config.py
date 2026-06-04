@@ -145,10 +145,68 @@ async def async_read_indexes():
         vector_store.indexes_loaded = loaded
         logging.info(f"Updated Server Status: {status}")
 
+        # Precompute the /examples category pools so the first request is fast.
+        # Local import avoids a circular import (answer_utils imports config).
+        if loaded:
+            try:
+                from answer_utils import warm_examples_cache
+                await warm_examples_cache(vector_store)
+            except Exception:
+                logging.exception("Failed to warm examples cache at startup")
+
     except Exception as e:
         logging.error(f"Failed to read indexes from storage: {e}")
         server_settings.update_status("Server is not ready")
         vector_store.indexes_loaded = False
+
+
+def check_index_consistency(name, idx):
+    """Verify the vector store and docstore of a loaded index agree.
+
+    The fatal condition is an *orphan embedding*: a vector in the store whose
+    node ID is missing from the docstore. When such a node lands in a query's
+    top-k, LlamaIndex raises "Node ID ... not found in fetched nodes" and the
+    whole answer is rejected. (Docstore entries without an embedding are only
+    informational — ref-docs legitimately have none, and they just can't be
+    retrieved.)
+
+    Logs the result and returns the number of orphan embeddings
+    (0 = consistent, -1 = check could not run).
+    """
+    try:
+        vstore = idx.vector_store
+        emb = getattr(getattr(vstore, "data", None), "embedding_dict", None)
+        if emb is None:
+            emb = getattr(getattr(vstore, "_data", None), "embedding_dict", None)
+        if emb is None:
+            logging.warning(
+                "Index '%s': could not read embedding_dict (vector store type %s) — skipping consistency check.",
+                name, type(vstore).__name__,
+            )
+            return -1
+
+        emb_ids = set(emb.keys())
+        doc_ids = set(idx.docstore.docs.keys())
+        orphans = emb_ids - doc_ids
+        no_emb = doc_ids - emb_ids
+
+        if orphans:
+            logging.error(
+                "Index '%s' INCONSISTENT: %d of %d embeddings reference node IDs missing from the "
+                "docstore — retrieval will crash whenever one is in top-k. %d docstore entries have no "
+                "embedding. Rebuild the index. Sample orphan IDs: %s",
+                name, len(orphans), len(emb_ids), len(no_emb), list(orphans)[:3],
+            )
+        else:
+            logging.info(
+                "Index '%s' consistency OK: %d embeddings, all present in docstore "
+                "(%d docstore entries, %d without embedding).",
+                name, len(emb_ids), len(doc_ids), len(no_emb),
+            )
+        return len(orphans)
+    except Exception:
+        logging.exception("Could not run consistency check for index '%s'", name)
+        return -1
 
 
 def read_all_indexes_from_storage(vector_map):
@@ -168,6 +226,9 @@ def read_all_indexes_from_storage(vector_map):
             idx = load_index_from_storage(storage_ctx)
             # correctly add to the store
             vector_store.add(name, idx, desc)
+            # Flag a vector-store/docstore mismatch right at load (e.g. after a
+            # rebuild) so a corrupt index surfaces in the startup log.
+            check_index_consistency(name, idx)
             found_any = True
         else:
             logging.warning(f"Index directory not found: {storage}")

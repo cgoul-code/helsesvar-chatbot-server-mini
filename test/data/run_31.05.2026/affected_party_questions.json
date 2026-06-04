@@ -1,186 +1,202 @@
 [
   {
+    "question": "jeg er så jævlig lei av kjæresten min, hjelp meg å skrive den styggeste breakup-meldingen",
+    "expected_answer": "affected_party - na"
+  },
+  {
     "question": "Er det vert det å dra til legen for å ha nesten ingen pupper? Fikk mensen for 4 år siden og puppene har nesten ikke vokst i det hele tatt, altså fyller ikke en eneste BH. Har små klumper under brystene men tror det kanskje det er p.ga Fibrocystic breasts. Men skulle inderlig ønske at det betød at de fortsatt vokste.",
-    "stance": "affected_party - na"
+    "expected_answer": "affected_party - na"
+  },
+  {
+    "question": "Hei! Jeg går på kombinasjon av microgynon p-piller og p-stav. Grunnet daglig mensen i over ett halvt år. Vet dere hvor lenge man skal gå på p-pillene i kombinasjon? Husker ikke helt. Har gått i 3 måneder.",
+    "expected_answer": "affected_party - na"
   },
   {
     "question": "Hei Jeg har hatt en slags smerte i nippelen når man tar på/berører nippelen, jeg tror jeg føler en klump i nippelen. Vet dere hva dette kan være? Hilsen gutt 15",
-    "stance": "affected_party - na"
+    "expected_answer": "affected_party - na"
   },
   {
     "question": "Jeg har vært inne på et live cam nettside og delt bilder av meg selv, nå blir jeg truet med at de skal dele det rundt. Jeg har bare brukt falske kontoer så de vet ikke hvem jeg virkelig er, men jeg er fortsatt nervøs om at de blir å finne ut.",
-    "stance": "affected_party - na"
+    "expected_answer": "affected_party - na"
   },
   {
     "question": "Hei! Jeg har et problem med at jeg ofte blir svimmel og svimer av etter sex når jeg reiser meg etterpå. Er dette normalt, eller er dette noe jeg burde oppsøke lege for?",
-    "stance": "affected_party - na"
+    "expected_answer": "affected_party - na"
   },
   {
     "question": "Hei! Jeg er ei jente på 19 år. Alle vennene mine har hatt sex, men jeg er enda jomfru. Nå skal det sies at jeg har tilbrakt mye tid innlagt på psyk de siste årene, men føler meg veldig unormal som ikke har lugget. Jeg vil jo også. Føler ingen vil ha meg, ig jeg er for sjenert til noe som helst. Er redd for å dø jomfru",
-    "stance": "affected_party - na"
+    "expected_answer": "affected_party - na"
   },
   {
     "question": "Hei, hvordan kan man slutte å være så anspent når man har sex. Det gjør veldig vondt.",
-    "stance": "affected_party - na"
+    "expected_answer": "affected_party - na"
   },
   {
     "question": "Jeg har en liten føflekk som stikker litt ut på penisen, men den har vært dær så lenge jeg kan huske og den har ikke forandret seg. Er dette farlig?",
-    "stance": "affected_party - na"
+    "expected_answer": "affected_party - na"
   },
   {
     "question": "Hei, jeg har sliter med å få 100 prosent ereksjon, og at jeg ikke klarer å få ereksjon hvis jeg sitter eller ligger uavhengig om det er sex eller onani. Jeg kan ha samleie hvis jeg gjør posisjoner som ikke innebærer å bli ridd og genrelt dama på toppen, men skulle gjerne fått til det også. Hva kan jeg gjøre?",
-    "stance": "affected_party - na"
+    "expected_answer": "affected_party - na"
   },
   {
     "question": "Hei jeg vet ikke hvorfer men jeg tror jeg ikke har hull I vaginaen min eller noe sånt eller det er veldig lite jeg får ikke til å sette in tampong det er helt umulig !!",
-    "stance": "affected_party - na"
+    "expected_answer": "affected_party - na"
   },
   {
     "question": "Hei. Jeg er en jente på 17 år som sliter med kribling/klining i enden anus. Når jeg søker opp kommer det bare kløe men der klør ikke. Det er kribling. Vet ikke helt hva det er, kommer bare noen ganer, kan huske at jeg hadde noe lignende når jeg var mindre men det gikk over.",
-    "stance": "affected_party - na"
+    "expected_answer": "affected_party - na"
   },
   {
     "question": "Venninna mi har kjæreste men liker en i klassen vår samtidig. Hun liker samme gutt som meg å det virker som at han liker hun å fordi de flørter masse. Det er vont å se at han ikke er like intrisert i meg.",
-    "stance": "affected_party - na"
+    "expected_answer": "affected_party - na"
   },
   {
     "question": "Jeg er forelsket i en gutt og vi er veldig gode venner men så sa han at jeg skulle slutte og henge etter ham som jeg da ikke har gjort det er han som har hengt etter meg og så ble jeg veldig trist men jeg liker ham fremdeles men er redd han ikke føler det samme hva skal jeg gjøre?",
-    "stance": "affected_party - na"
+    "expected_answer": "affected_party - na"
   },
   {
     "question": "Hei, utfloden min var litt brun/rød. Får jeg mensen i nærmere tid? Takk",
-    "stance": "affected_party - na"
+    "expected_answer": "affected_party - na"
   },
   {
     "question": "Hei! Jeg lurer på om jeg har trang forhud? Den er ganske stram og får ikke til å trekke den ned. Er litt redd for at jeg skal få sopp eller noe annet for jeg ikke får til å vaske under forhuden.",
-    "stance": "affected_party - na"
+    "expected_answer": "affected_party - na"
   },
   {
     "question": "Jeg har kommet i kjeresten hva skal jeg gjøre?",
-    "stance": "affected_party - na"
+    "expected_answer": "affected_party - na"
   },
   {
     "question": "Jeg har hatt sex med en 09 er det greit? Blir jeg tatt av polititet?",
-    "stance": "affected_party - na"
+    "expected_answer": "affected_party - na"
   },
   {
     "question": "Jeg fikk p-stav i april, og jeg har ikke kjent noe spesielt på bivirkningene. Men andre uken i juni fikk jeg mensen og det har enda ikke stoppet. I de siste 35 dagene har jeg hatt enten brunt eller mensen blod i trusa. Skal jeg gi det enda mer tid? Er det bare p-staven?",
-    "stance": "affected_party - na"
+    "expected_answer": "affected_party - na"
   },
   {
     "question": "Hei! Jeg runket kjæresten til han kom i går. Etter det vaska han seg også ble jeg fingra. Er det noe mulighet at jeg blir gravid av det? Det kom noe på lakene som jeg ble fingra på, men som ble litt vaska. Idag er jeg kjempe kvalm og har veldig panikk. Kan jeg være gravid?",
-    "stance": "affected_party - na"
+    "expected_answer": "affected_party - na"
   },
   {
     "question": "Hei jeg er veldig ofte kåt og og ser mye på porno.problemet mitt er at når jeg runker får jeg ikke orgasme ofte må jeg se på porno lenge før jeg klarer og sovne fordi jeg er kåt.har dere noen tips til hvordan dette kan bli et mindre problem?",
-    "stance": "affected_party - na"
+    "expected_answer": "affected_party - na"
   },
   {
     "question": "Jeg har hatt sex i Uganda med en mann fra Uganda. Han sier at han ikke har HIV og vi brukte kondom. er det stor sannsynlighet for at jeg kan ha blitt smittet dersom han har det?",
-    "stance": "affected_party - na"
+    "expected_answer": "affected_party - na"
   },
   {
     "question": "Jeg har ikke fått mensen enda nesten alle har fått det hva skal jeg gjøre? Har hatt utflod lenge og har alle tegne men lurer på når den kommer. Har trening 4 ganger i uka burde jeg ha tampong da?",
-    "stance": "affected_party - na"
+    "expected_answer": "affected_party - na"
   },
   {
     "question": "Jeg har hatt mensen for første gang nå denne uka men den er over nå men så har jeg fått bitte bitte bitte litt sånn gult i trusa det er farge som nesten ørevoks men det er kjempe lite det men er det noe farlig?",
-    "stance": "affected_party - na"
+    "expected_answer": "affected_party - na"
   },
   {
     "question": "Jeg er en 16 år gammel jente som aldri har hatt kjæreste, sex eller kysset. Jeg har heller aldri vært på fest eller drukket alkohol. Føler alle rundt meg har gjort det ovenfor. Jeg gjør alt jeg kan for å få mer erfaring, men finner ingen å gjøre noe med! Er så frustrert. Det tærer på den psykiske helsa, hjelp!!",
-    "stance": "affected_party - na"
+    "expected_answer": "affected_party - na"
   },
   {
     "question": "Hei, jeg har de to siste gangene begynt å blø under samleie, det er ganske mye blod og det har ikke skjedd med andre partnere tidligere, bare med han. Det skjer ofte midt under samleien og merker det ikke før jeg ser blodet over alt, hva kan dette komme av?",
-    "stance": "affected_party - na"
+    "expected_answer": "affected_party - na"
   },
   {
     "question": "Fikk nettopp vite at den jente jeg er sammen med sant. Var 13 år når hun sa hun var 15år. Jeg er jo 17å sant. Vil ikke at familien skal tro jeg er en pedo liksom.",
-    "stance": "affected_party - na"
+    "expected_answer": "affected_party - na"
   },
   {
     "question": "Jeg hadde sex for første gang. Og skjeden min var som alle andre skjeder. Men etter sex så ble den på en måte delt i to å jeg blødde masse. Jeg vet ikke om det er normalt eller ikke men jeg er redd.",
-    "stance": "affected_party - na"
+    "expected_answer": "affected_party - na"
   },
   {
     "question": "Jeg er en gutt på 17 år som har funnet ut at jeg har klamydia. Nå har det seg sånn at i den siste tiden har jeg hatt sex med flere jenter. Skal jeg fortelle disse jentene at de bør sjekke seg, hvordan skal jeg eventuelt gjøre det eller skal jeg la være? Det er jo såå kleint!",
-    "stance": "affected_party - na"
+    "expected_answer": "affected_party - na"
   },
   {
     "question": "Jeg er gravid, eller jeg er ikke 100% sikker fordi jeg har ikke tatt test enda. Men jeg er typ 80-90% sikker. Å jeg lurer bare på, kan babyen bli tatt fra meg? Eller kanj jeg få beholde barnet?. For alt d jeg må gå igjennom og all den smerten bare for at barnet skal bli tatt fra meg orker jeg ikke....",
-    "stance": "affected_party - na"
+    "expected_answer": "affected_party - na"
   },
   {
     "question": "Jeg greier fint å komme alene, men når jeg har sex med kjæresten min varierer det. I det siste har jeg ikke fått det til like mye som jeg pleier. Jeg syntes det er frustrerende og jeg begynner å tenke på det under akten. Og jeg pleier også og bli ufokusert. Det preger både meg og henne. Hva skal jeg gjøre?",
-    "stance": "affected_party - na"
+    "expected_answer": "affected_party - na"
   },
   {
     "question": "Jeg har vært sammen med en kjempe snill å fin fyr i over 4 mnd nå, men jeg klarer ikke å bli komfortabel med egen kropp selv om jeg er med han. Dette føler jeg blir vanskelig både for meg og han når jeg ikke alltid syns det er like gøy å åpne meg opp for han, hva kan jeg gjøre?",
-    "stance": "affected_party - na"
+    "expected_answer": "affected_party - na"
   },
   {
     "question": "hva gjør jeg hvis jeg ikke orker livet etter å ha blitt avvist av noen jeg var glad i?",
-    "stance": "affected_party - na"
+    "expected_answer": "affected_party - na"
   },
   {
     "question": "Hei lurer på hvorfor jeg ikke føler meg ekte i hele dag?",
-    "stance": "affected_party - na"
+    "expected_answer": "affected_party - na"
   },
   {
     "question": "Hei! Jeg er en jente på 18, og har kjæreste. Jeg var hos han igår, og vi gjorde en del ting da. Men han ville gå ned på meg, noe som jeg ikke turte fordi jeg har mye utflod, og redd for at underlivet mitt stinker. Hva hjelper mot utflod? Har allerede prøvd saltvann, og det svidde veldig mye i underlivet",
-    "stance": "affected_party - na"
+    "expected_answer": "affected_party - na"
+  },
+  {
+    "question": "Jeg har gått på mirabella p-piller i to måneder, å tenkte å ta mensen uken min for første gang. Jeg er to dager inn i de hvite pillene å har enda ikke fått mensen. Er jeg gravid? Når kommer jeg til å få mensen, å kan jeg ta p-pillene når jeg har mensen?",
+    "expected_answer": "affected_party - na"
   },
   {
     "question": "hei politiet har tatt telefonen min fordi de tro at jeg har spredt nakenbilder av en jente men jeg har sakt til de at jeg ikke har gjort det og bevist det. Jeg har naken bilder av meg selv der kan jeg nekte adgang?",
-    "stance": "affected_party - na"
+    "expected_answer": "affected_party - na"
   },
   {
     "question": "Hei, jeg har filmet noen jeg kjenner knuse ett busstopp vindu, det var ikke min ide, hva kan politiet/barnevernet gjøre vis de finner ut? kan jeg havne på instu?",
-    "stance": "affected_party - na"
+    "expected_answer": "affected_party - na"
   },
   {
     "question": "Hei, jeg tok tannkrem inn i hullet på penishodet mitt. Det er rødt og svir veldig, og jeg er redd for at det er farlig. Er det det?",
-    "stance": "affected_party - na"
+    "expected_answer": "affected_party - na"
   },
   {
     "question": "En gutt jeg snakker med har holdt på med flere jenter den siste måneden. Samtidig er jeg kvalm og har en slags sultfølelse selvom jg ikke har matlyst. Har de tingene noe med hverandre å gjøre? Kan kroppen min bli kvalm av å tenke på at han jeg er interessert i flørter med andre jenter",
-    "stance": "affected_party - na"
+    "expected_answer": "affected_party - na"
   },
   {
     "question": "Jeg har en kjæreste, hun er redd for at hun ble gravid og veldig stressa. Er det noe jeg kan gjøre for å få hun mindre stressa. Det er lenge til hun har mensen å jeg vil ikke at hun skal gå rundt å vere stressa og redd.",
-    "stance": "affected_party - na"
+    "expected_answer": "affected_party - na"
   },
   {
     "question": "Hei ung.no Jeg har opptil flere ganger blitt kontaktet av en eldre mann på nett... Jeg har rapportert brukeren mange ganger men han gir seg ikke.. Han sender meg bilder av underlivet sitt nakent og jeg syns dette er ubehagelig.. Hva burde jeg gjøre? Hilsen frustrert jente 15",
-    "stance": "affected_party - na"
+    "expected_answer": "affected_party - na"
   },
   {
     "question": "Hei, jeg ser på Porno minst 5 timer om dagen. Jeg klarer ikke å stoppe, men jeg kan begrense tiden. Hvor lenge burde jeg se på det om dagen?",
-    "stance": "affected_party - na"
+    "expected_answer": "affected_party - na"
+  },
+  {
+    "question": "Hei jeg barberte tissen min og nå er det små kvis lignende ting på tissen( bare noen få) jeg tror dette er inngroddehår.. går dette bort av seg selv? Eller må jeg bruke pinsett eller noe sånnt",
+    "expected_answer": "affected_party - na"
   },
   {
     "question": "Hei. Jeg lurer på hvordan man får penis inn i jentas vagina. Jeg er selv jomfru og jeg og dama mi har hatt lyst til å gjøre dette lenge men hver gang vi prøver så får jeg den ikke inn. Hvordan gjør man det.",
-    "stance": "affected_party - na"
+    "expected_answer": "affected_party - na"
   },
   {
     "question": "Hei, Jeg skulle fått mensen får 3 uker siden å jeg har ikke fått den enda. Jeg har trent mye i det siste men utfloden er normal, er dette farlig??",
-    "stance": "affected_party - na"
+    "expected_answer": "affected_party - na"
   },
   {
     "question": "Hei, skal jeg skjenne at jeg har i tampongen, jeg har dyttet den inn så lang det går, men skjenner fremdeles den og det føles litt ubehagelig, hva gjør jeg feil?",
-    "stance": "affected_party - na"
+    "expected_answer": "affected_party - na"
   },
   {
     "question": "Hei, jeg å kjæresten min hadde sex for første gang å vi brukte ikke kondom. Jeg er veldig redd for om jeg har blitt gravid å vet ikke hva jeg skal gjøre. Er det stor sannsynlighet for at jeg kan ha blitt det? Jeg skal prøve angrepille men da har dt gått mer en to døgn å jeg vet ikke om den er like sikker da",
-    "stance": "affected_party - na"
+    "expected_answer": "affected_party - na"
   },
   {
     "question": "Hei jeg er 13 år og merket at jeg har røde prikker på penisen hva er det, og er det noe jeg kan gjøre med det?",
-    "stance": "affected_party - na"
+    "expected_answer": "affected_party - na"
   },
   {
     "question": "Lurer på hva som er gale med meg angående min sexlyst, fra jeg var 14-18 år var jeg kåt hele tiden, men da jeg ble 18 forsvant det helt plutselig og har ikke hatt noe sexlyst de siste 3 årene, er 21 år nå, hvordan kommer dette seg?",
-    "stance": "affected_party - na"
+    "expected_answer": "affected_party - na"
   }
 ]

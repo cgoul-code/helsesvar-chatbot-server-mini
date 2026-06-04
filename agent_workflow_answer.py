@@ -15,7 +15,6 @@ from typing import Any, Dict, List, Literal, Optional, Tuple, Annotated
 from typing_extensions import TypedDict
 from pydantic import BaseModel, Field
 
-from llama_index.core.base.response.schema import Response
 from llama_index.core.query_engine import BaseQueryEngine
 from llama_index.core import VectorStoreIndex
 from llama_index.core.retrievers import BaseRetriever
@@ -74,10 +73,6 @@ MAX_NODES_FOR_VERIFICATION = 8
 
 # Hvor mange tegn per node som brukes
 MAX_CHARS_PER_NODE = 2500
-
-
-# Hvis best_score > dette → vi anser treffet som veldig godt og kan gjøre mindre arbeid
-HIGH_CONFIDENCE_THRESHOLD = 0.82
 
 # ---------------------------------------------------------
 # Datamodeller og typer
@@ -170,7 +165,6 @@ class State_Answer(TypedDict):
     response_style_source: Literal["auto", "override", "forced_red", ""]
     relevancy_band: str
     best_node_score: float
-    response: Response | None
     validate_response_result: Literal["Accepted", "Rejected"]
     answer: str
     feedback: str
@@ -182,7 +176,18 @@ class State_Answer(TypedDict):
     
     input_tokens: Annotated[int, add]
     output_tokens: Annotated[int, add]
-    
+
+    ''' tuning '''
+    # Min fraction of cited claims that must be supported for an answer to
+    # stay "valid" in query_grounded. Default 1.0.
+    claims_valid_threshold: float
+    # When True, query_grounded runs an LLM entailment gate that downgrades
+    # claims whose (real) quote doesn't support them. Default True.
+    entailment_check: bool
+
+    ''' debug '''
+    debug_emit_nodes: bool  # emit exact retrieved nodes as `retrieved_nodes`
+
 class NextIntent(BaseModel):
     intent: str = Field(description="Kort intensjon, ikke et fullstendig spørsmål")
     why: str
@@ -250,6 +255,9 @@ class WorkerState(TypedDict):
     llm: Any
     conversation_str: str
     query_severity: str
+    claims_valid_threshold: float
+    entailment_check: bool
+    debug_emit_nodes: bool
     
 
 _POSSIBLE_META_IDS = ("doc_id", "from_doc_id", "document_id", "source_id")
@@ -810,6 +818,9 @@ def fast_single(state: State_Answer) -> Dict[str, Any]:
         "llm": state["llm"],
         "conversation_str": state.get("conversation_str", ""),
         "query_severity": state.get("query_severity", "Green"),
+        "claims_valid_threshold": state.get("claims_valid_threshold", 1.0),
+        "entailment_check": state.get("entailment_check", True),
+        "debug_emit_nodes": state.get("debug_emit_nodes", False),
     }
 
     # Kjør eksisterende logikk (henter noder, genererer GroundedAnswer,
@@ -953,7 +964,127 @@ def help_after_harm(state: State_Answer) -> Dict[str, Any]:
             "input_tokens": 0,
             "output_tokens": 0,
         }
-    
+
+
+# ---------------------------------------------------------
+# Entailment-gate: et sitat kan finnes ordrett i kilden uten å støtte
+# påstanden (f.eks. et p-stav-sitat brukt på en p-plaster-påstand). Sitat-
+# sjekken (_verify_claims) fanger bare oppdiktede sitater, ikke gale
+# slutninger — denne porten lukker det hullet.
+# ---------------------------------------------------------
+
+class _EntailmentItem(BaseModel):
+    index: int
+    supported: bool = Field(
+        description="True bare hvis sitatet/sitatene faktisk støtter påstanden."
+    )
+
+class _EntailmentResult(BaseModel):
+    verdicts: List[_EntailmentItem]
+
+
+ENTAILMENT_PROMPT = (
+    "Du er en streng faktasjekker. For hver PÅSTAND får du ett eller flere SITAT "
+    "som er hentet ordrett fra kildene. Avgjør om sitatet/sitatene FAKTISK STØTTER "
+    "påstanden — altså om de handler om SAMME tiltak/forhold og logisk medfører "
+    "påstanden.\n"
+    "- Et sitat som handler om noe ANNET (for eksempelet annet produkt/prevensjonsmiddel, en "
+    "annen aldersgruppe, en annen ordning) støtter IKKE påstanden, selv om noen ord "
+    "er like.\n"
+    "- Vær spesielt streng på forveksling av ulike, men beslektede ting "
+    "(f.eks. p-stav vs p-plaster vs p-pille).\n"
+    "Returner for hver indeks om den er supported (true/false).\n\n"
+    "Påstander og sitater:\n"
+)
+
+
+def _content_tokens(text: str) -> set:
+    """Distinctive (len>=5) lowercase tokens used for the cheap pre-filter."""
+    return {
+        t for t in re.findall(r"[a-zæøå0-9]+", (text or "").lower())
+        if len(t) >= 5
+    }
+
+
+def _entailment_needed(claim: str, quotes: List[str], min_overlap: float = 0.9) -> bool:
+    """True if claim/quote term-overlap is low enough to warrant an LLM check.
+
+    Cheap gate so obviously-supported claims skip the LLM entirely. With high
+    overlap we assume support; otherwise we let the LLM decide.
+    """
+    ct = _content_tokens(claim)
+    if not ct:
+        return False
+    qt: set = set()
+    for q in quotes:
+        qt |= _content_tokens(q)
+    present = sum(1 for t in ct if t in qt)
+    return (present / len(ct)) < min_overlap
+
+
+def _apply_entailment_gate(claims_report: List[Dict[str, Any]], llm) -> Tuple[int, int]:
+    """Downgrade string-matched claims whose quotes don't actually support them.
+
+    Runs ONE batched LLM call over the claims a cheap term-overlap pre-filter
+    flags as suspicious. Fails open: any error keeps the existing string-match
+    validity. Returns (input_tokens, output_tokens) consumed.
+    """
+    candidates: List[Tuple[Dict[str, Any], List[str]]] = []
+    for ce in claims_report:
+        if not ce.get("any_citation_valid"):
+            continue
+        quotes = [
+            (c.get("quote") or "").strip()
+            for c in ce.get("citations_report", [])
+            if c.get("found_in_nodes") and (c.get("quote") or "").strip()
+        ]
+        if not quotes:
+            continue
+        if not _entailment_needed(ce.get("claim_text", ""), quotes):
+            continue
+        candidates.append((ce, quotes))
+
+    if not candidates:
+        return 0, 0
+
+    lines = []
+    for i, (ce, quotes) in enumerate(candidates):
+        joined = " | ".join(quotes)
+        lines.append(f"{i}. PÅSTAND: {ce.get('claim_text', '')}\n   SITAT: {joined}")
+    prompt = ENTAILMENT_PROMPT + "\n".join(lines)
+
+    try:
+        res, in_tok, out_tok = _invoke_with_usage(
+            llm.with_structured_output(_EntailmentResult), prompt
+        )
+        supported = {v.index: v.supported for v in res.verdicts}
+    except Exception as e:
+        logging.error("Entailment batch call failed, keeping string-match validity: %s", e)
+        return 0, 0
+
+    for i, (ce, _quotes) in enumerate(candidates):
+        # Default True = don't downgrade a claim the model didn't return a verdict for.
+        if supported.get(i, True):
+            continue
+        ce["any_citation_valid"] = False
+        ce["all_citations_valid"] = False
+        note = (
+            f"claim[{ce.get('claim_index')}]: sitatet finnes i kilden, men støtter "
+            f"ikke påstanden (entailment-sjekk)"
+        )
+        ce.setdefault("problems", []).append(note)
+        cits = ce.get("citations_report") or []
+        if cits:
+            cits[0].setdefault("problems", []).append(note)
+        _emit(
+            f"⛔ Entailment: påstand {ce.get('claim_index', 0) + 1} forkastet — "
+            f"sitatet handler om noe annet enn påstanden.",
+            event="systeminfo",
+        )
+
+    return in_tok, out_tok
+
+
 def query_grounded(state: WorkerState) -> Dict[str, Any]:
     """
     For hvert delspørsmål:
@@ -980,6 +1111,22 @@ def query_grounded(state: WorkerState) -> Dict[str, Any]:
         # Retrieval
         nodes = retriever.retrieve(question) or []
         _emit(f"Retrieved {len(nodes)} nodes", event="info")
+
+        # Debug: emit the exact nodes this worker retrieved (text + score),
+        # so a test can record the precise source set used for the answer.
+        # With similarity_top_k <= MAX_NODES_FOR_CONTEXT this is identical to
+        # the context fed to the LLM. Off unless explicitly requested.
+        if state.get("debug_emit_nodes"):
+            node_dump = [
+                {
+                    "score": float(getattr(n, "score", 0.0) or 0.0),
+                    "url": (_node_meta(n).get("url") or ""),
+                    "node_type": _node_meta(n).get("node_type", ""),
+                    "text": _node_text(getattr(n, "node", n)),
+                }
+                for n in nodes
+            ]
+            _emit(json.dumps(node_dump, ensure_ascii=False), event="retrieved_nodes")
 
         thresholds = state.get("relevancy_thresholds", {
             "strong": 0.60,
@@ -1079,6 +1226,14 @@ def query_grounded(state: WorkerState) -> Dict[str, Any]:
 
         global_problems = results.get("global_problems", [])
         claims_report = results.get("claims_report", [])
+
+        # Entailment-gate: downgrade claims whose (real) quote doesn't actually
+        # support them. Adds at most ONE small batched LLM call per subquery,
+        # and only when the cheap term-overlap pre-filter flags something.
+        ent_in = ent_out = 0
+        if state.get("entailment_check", True):
+            ent_in, ent_out = _apply_entailment_gate(claims_report, state["llm"])
+
         answer_wrapped = _wrap_at_nearest_space(ga.answer, width=120)
 
         # 5) validering og UI-output med detaljer
@@ -1100,7 +1255,7 @@ def query_grounded(state: WorkerState) -> Dict[str, Any]:
             citations_report = claim_entry["citations_report"]
 
             _emit("\n", event="systeminfo")
-            _emit(f"# **Påstand {idx}: {claim_text}** ", event="systeminfo")
+            _emit(f"# **Påstand {idx + 1}: {claim_text}** ", event="systeminfo")
             _emit(f"Minst én sitat-treff: {any_citation_valid}", event="systeminfo")
             _emit(f"Alle sitater gyldige: {all_citations_valid}", event="systeminfo")
 
@@ -1167,12 +1322,13 @@ def query_grounded(state: WorkerState) -> Dict[str, Any]:
                 # Ikke forkast hele svaret – vurder andelen gyldige claims
                 valid_claims = sum(1 for c in claims_report if c["any_citation_valid"])
                 total_claims = len(claims_report)
+                claims_threshold = state.get("claims_valid_threshold", 1.0)
 
                 if total_claims == 0 or valid_claims == 0:
                     # Ingen claims kunne støttes i det hele tatt
                     state["subquery"].response_validity = "not valid"
-                elif valid_claims / total_claims < 0.5:
-                    # Færre enn halvparten av claims er støttet
+                elif valid_claims / total_claims < claims_threshold:
+                    # Færre enn terskelen av claims er støttet
                     state["subquery"].response_validity = "not valid"
                 else:
                     # Majoriteten er støttet – behold svaret
@@ -1196,8 +1352,8 @@ def query_grounded(state: WorkerState) -> Dict[str, Any]:
 
         return {
             "completed_subqueries": [state["subquery"]],
-            "input_tokens": in_tokens,
-            "output_tokens": out_tokens,
+            "input_tokens": in_tokens + ent_in,
+            "output_tokens": out_tokens + ent_out,
         }
 
     except Exception as e:
@@ -1429,7 +1585,6 @@ def emit_query_answer_references(state: State_Answer) -> Dict[str, Any]:
                 "response_style_source": state.get("response_style_source", ""),
                 "relevancy_band": relevancy_band,
                 "best_node_score": best_node_score,
-                "response_set": state.get("response") is not None,
                 "validate_response_result": state.get("validate_response_result", ""),
             },
             ensure_ascii=False,
@@ -1522,6 +1677,9 @@ def assign_workers(state: State_Answer) -> List[Send]:
                 "retriever": state["retriever"],
                 "conversation_str": state.get("conversation_str", ""),
                 "query_severity": state.get("query_severity", "Green"),
+                "claims_valid_threshold": state.get("claims_valid_threshold", 1.0),
+                "entailment_check": state.get("entailment_check", True),
+                "debug_emit_nodes": state.get("debug_emit_nodes", False),
             },
         )
         for s in state["subqueries"]
@@ -1924,5 +2082,5 @@ builder.add_edge("emit_query_answer_references", "related_queries_dialog_from_qu
 builder.add_edge("related_queries_dialog_from_query", END)
 
 answer_workflow = builder.compile()
-from graph_utils import save_mermaid_diagram
-save_mermaid_diagram(answer_workflow.get_graph())
+#from graph_utils import save_mermaid_diagram
+#save_mermaid_diagram(answer_workflow.get_graph())

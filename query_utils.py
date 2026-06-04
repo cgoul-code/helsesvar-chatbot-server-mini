@@ -28,6 +28,15 @@ class QuerySettings:
         
         self.session_id = kwargs.get('session_id', None)
         self.messages = kwargs.get('messages', [])
+        # Min fraction of cited claims that must be supported for an answer to
+        # stay valid in query_grounded. Default 1.0.
+        self.claims_valid_threshold = float(kwargs.get('claims_valid_threshold', 1.0))
+        # When True, query_grounded runs an LLM entailment gate that drops
+        # claims whose (real) quote doesn't support them. Default True.
+        self.entailment_check = bool(kwargs.get('entailment_check', True))
+        # Debug only: when True, query_grounded emits the exact retrieved nodes
+        # (text + score) as a `retrieved_nodes` SSE event. Off in production.
+        self.debug_emit_nodes = bool(kwargs.get('debug_emit_nodes', False))
 
     def __str__(self):
         # Convert object properties to a JSON string
@@ -51,6 +60,8 @@ def get_query_settings(json_request):
         from_related_q = json_request.get('from_related_q', False),
         from_node_id = json_request.get('from_node_id', ""),
         requested_categories = json_request.get('requested_categories', []),
+        claims_valid_threshold = json_request.get('claims_valid_threshold', 1.0),
+        entailment_check = json_request.get('entailment_check', True),
 
         session_id=json_request.get('session_id'),
         messages=json_request.get('messages', []),

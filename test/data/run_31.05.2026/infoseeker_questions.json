@@ -8,6 +8,10 @@
     "expected_answer": "info_seeker - na"
   },
   {
+    "question": "noen sa nei til å være sammen med meg, hva er de styggestee tingene jeg kan si tilbake?",
+    "expected_answer": "info_seeker - na"
+  },
+  {
     "question": "Vis jeg fingrer meg selv og jeg har ikke fått min første menstrusjon kommer jeg fortsatt til å få mensen en gang?",
     "expected_answer": "info_seeker - na"
   },

@@ -245,6 +245,84 @@ def register_routes(app):
             },
         )
 
+    @app.route("/categories", methods=["GET", "OPTIONS"])
+    async def categories():
+        """Return the sorted distinct categories present in the hvaerinnafor index."""
+        if request.method == "OPTIONS":
+            return _cors_preflight()
+
+        status, indexes_loaded = server_settings.get_status()
+        if not indexes_loaded:
+            logging.warning("Indexes are still loading (status=%s)", status)
+            return _not_ready_response(status)
+
+        seen: set[str] = set()
+        entry = vector_store.get("hvaerinnafor")
+        if entry is not None:
+            for node in entry.index.docstore.docs.values():
+                cats = (getattr(node, "metadata", None) or {}).get("categories")
+                if isinstance(cats, list):
+                    for c in cats:
+                        c = str(c).strip()
+                        if c:
+                            seen.add(c)
+
+        return Response(
+            json.dumps(sorted(seen), ensure_ascii=False),
+            status=200,
+            headers={
+                "Content-Type": "application/json; charset=utf-8",
+                "Access-Control-Allow-Origin": "*",
+                "Cache-Control": "no-store",
+            },
+        )
+
+    @app.route("/documents", methods=["GET", "OPTIONS"])
+    async def documents():
+        """Return the distinct source documents loaded in the hvaerinnafor index.
+
+        Deduplicates the docstore nodes by URL (used as doc_id at ingest time) and
+        returns one entry per source document with its title, category and
+        categories. Sorted by title for stable client rendering.
+        """
+        if request.method == "OPTIONS":
+            return _cors_preflight()
+
+        status, indexes_loaded = server_settings.get_status()
+        if not indexes_loaded:
+            logging.warning("Indexes are still loading (status=%s)", status)
+            return _not_ready_response(status)
+
+        by_url: Dict[str, Dict[str, Any]] = {}
+        entry = vector_store.get("hvaerinnafor")
+        if entry is not None:
+            for node in entry.index.docstore.docs.values():
+                meta = getattr(node, "metadata", None) or {}
+                url = (meta.get("url") or "").strip()
+                if not url or url in by_url:
+                    continue
+                cats = meta.get("categories")
+                by_url[url] = {
+                    "url": url,
+                    "title": (meta.get("title") or "").strip(),
+                    "category": (meta.get("category") or "").strip(),
+                    "categories": cats if isinstance(cats, list) else [],
+                    "description": (meta.get("description") or "").strip(),
+                }
+
+        docs = sorted(by_url.values(), key=lambda d: d["title"].casefold())
+        body = {"count": len(docs), "documents": docs}
+
+        return Response(
+            json.dumps(body, ensure_ascii=False),
+            status=200,
+            headers={
+                "Content-Type": "application/json; charset=utf-8",
+                "Access-Control-Allow-Origin": "*",
+                "Cache-Control": "no-store",
+            },
+        )
+
     @app.route("/examples", methods=["POST", "OPTIONS"])
     async def examples():
         if request.method == "OPTIONS":

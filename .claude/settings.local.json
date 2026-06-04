@@ -11,7 +11,12 @@
       "Bash(PYTHONPATH=. PYTHONIOENCODING=utf-8 python -u test/data/find_unanswered_questions.py --target 50 --max-candidates 180 --seed 42 --out test/data/unanswered_questions.json --log test/data/unanswered_questions_log.json)",
       "Bash(PYTHONPATH=. PYTHONIOENCODING=utf-8 python -u test/data/find_stance_questions.py --out test/data/stance_questions_smoke.json --log '' --target-info 2 --target-affected 2 --target-harm-planning 2 --target-harm-completed 1 --pool-info-affected 30 --pool-harm-seed 30 --seed 1)",
       "Bash(PYTHONPATH=. PYTHONIOENCODING=utf-8 python -u test/data/find_stance_questions.py --out test/data/stance_questions.json --log test/data/stance_questions_log.json --target-info 50 --target-affected 50 --target-harm-planning 25 --target-harm-completed 25 --pool-info-affected 250 --pool-harm-seed 400 --seed 42)",
-      "Bash(PYTHONPATH=. PYTHONIOENCODING=utf-8 python -u test/data/find_stance_questions.py --out test/data/stance_smoke.json --log '' --target-info 2 --target-affected 2 --target-harm-planning 1 --target-harm-completed 0 --pool-info-affected 40 --pool-harm-seed 10 --seed 1 --verify-buckets info_seeker,affected_party)"
+      "Bash(PYTHONPATH=. PYTHONIOENCODING=utf-8 python -u test/data/find_stance_questions.py --out test/data/stance_smoke.json --log '' --target-info 2 --target-affected 2 --target-harm-planning 1 --target-harm-completed 0 --pool-info-affected 40 --pool-harm-seed 10 --seed 1 --verify-buckets info_seeker,affected_party)",
+      "PowerShell(python -c \"import docx; print\\('python-docx OK', docx.__version__\\)\")",
+      "PowerShell(python -m pip install python-docx --quiet 2>&1)",
+      "PowerShell(python -c \"import docx; print\\('OK', docx.__version__\\)\")",
+      "PowerShell(python generate_platform_doc.py)",
+      "Bash(python -c \"import pandas; print\\(pandas.__version__\\)\")"
     ],
     "additionalDirectories": [
       "c:\\Users\\ChristianGoulignac\\vscode\\llama\\chatbot-client-HEI20-v2\\client\\src"
