@@ -1,6 +1,9 @@
 # prompts/registry.py
+import json
+import logging
+import os
 from dataclasses import dataclass
-from typing import Dict
+from typing import Dict, List
 from langchain_core.prompts import PromptTemplate
 
 @dataclass(frozen=True)
@@ -16,6 +19,95 @@ class Prompt:
             raise KeyError(f"Missing variable '{missing}' for prompt '{self.id}'") from None
         
 
+
+
+# === HJELPETJENESTER (oversikt over hjelpetilbud for ungdom) ===
+
+# Strukturert oversikt over hjelpetjenester (kilde: Hjeleptjenester_ungdom.xlsx,
+# konvertert til hjelpetjenester_ungdom.json). Brukes av harm-grenene
+# (refuse_harm_to_others og help_after_harm) til å la LLM-en plukke de mest
+# relevante tilbudene for den konkrete situasjonen og spørsmålet, i stedet for
+# en hardkodet liste.
+_HJELPETJENESTER_PATH = os.path.join(
+    os.path.dirname(__file__), "hjelpetjenester_ungdom.json"
+)
+
+
+def _load_hjelpetjenester() -> List[Dict]:
+    try:
+        with open(_HJELPETJENESTER_PATH, encoding="utf-8") as f:
+            return json.load(f).get("tjenester", [])
+    except Exception as e:  # pragma: no cover - degraderer pent
+        logging.warning("Kunne ikke laste hjelpetjenester_ungdom.json: %s", e)
+        return []
+
+
+HJELPETJENESTER: List[Dict] = _load_hjelpetjenester()
+
+
+def _kontakt_str(tjeneste: Dict) -> str:
+    deler = []
+    nett = (tjeneste.get("nettside") or "").strip()
+    tlf = (tjeneste.get("telefon") or "").strip()
+    if nett and not nett.lower().startswith("ingen"):
+        deler.append(nett)
+    if tlf and not tlf.lower().startswith("ingen"):
+        deler.append(f"tlf {tlf}")
+    return " | ".join(deler) if deler else "personlig samtale"
+
+
+def format_hjelpetjenester_catalog(tjenester: List[Dict] = None) -> str:
+    """Render hjelpetjenestene som en kompakt katalog LLM-en kan velge fra.
+
+    Hver linje gir navn, kontaktinfo, når tilbudet er relevant og stikkord,
+    slik at modellen kan matche tilbud mot konteksten og spørsmålet.
+    """
+    tjenester = HJELPETJENESTER if tjenester is None else tjenester
+    blokker = []
+    for t in tjenester:
+        blokker.append(
+            f"- **{t.get('navn', '')}** ({_kontakt_str(t)})\n"
+            f"  Når relevant: {t.get('naar_relevant', '')}\n"
+            f"  Stikkord: {', '.join(t.get('tags', []))}"
+        )
+    return "\n".join(blokker)
+
+
+# Forhåndsrendret katalog – statisk for prosessens levetid.
+HJELPETJENESTER_KATALOG: str = format_hjelpetjenester_catalog()
+
+# Oppslag på id for deterministisk injisering av enkelttilbud.
+HJELPETJENESTER_BY_ID: Dict[str, Dict] = {
+    t.get("id"): t for t in HJELPETJENESTER if t.get("id")
+}
+
+
+def format_hjelpetjeneste_linje(tjeneste: Dict, blurb: str = "") -> str:
+    """Render ett tilbud som én markdown-linje (navn, kontakt, kort tekst).
+
+    Brukes når et tilbud skal injiseres deterministisk i et svar. `blurb`
+    overstyrer teksten etter kontaktinfoen; uten den brukes en forkortet
+    «Når relevant»-tekst.
+    """
+    if not tjeneste:
+        return ""
+    kontakt = []
+    nett = (tjeneste.get("nettside") or "").strip()
+    tlf = (tjeneste.get("telefon") or "").strip()
+    if nett and not nett.lower().startswith("ingen"):
+        url = nett if nett.startswith("http") else f"https://{nett}"
+        kontakt.append(f"[{nett}]({url})")
+    if tlf and not tlf.lower().startswith("ingen"):
+        kontakt.append(f"telefon **{tlf}**")
+    kontakt_str = " · ".join(kontakt)
+    if not blurb:
+        blurb = (tjeneste.get("naar_relevant") or "").split(".")[0].strip()
+    deler = [f"**{tjeneste.get('navn', '')}**"]
+    if kontakt_str:
+        deler.append(kontakt_str)
+    if blurb:
+        deler.append(blurb)
+    return "- " + " – ".join(deler)
 
 
 # === VARIABLES ===
@@ -112,13 +204,18 @@ DU SKAL:
    konkrete verktøy, apper, metoder eller fremgangsmåter, ikke engang for å
    advare mot dem.
 
-4) AVSLUTT MED 2-3 KONKRETE RESSURSER. Velg de som passer situasjonen:
-   - **Mental Helse Ungdom**: chat og telefon **116 123**
-   - **Kors på halsen** (Røde Kors): **16 111** eller chat
-   - **[Slettmeg.no](https://slettmeg.no)** for bilder/personvern på nett
-   - Politiet: **02800** (ikke-akutt) eller **112** (akutt fare)
-   - **Sex og samfunn** – kvalifisert helsepersonell
-   - En voksen du stoler på (foreldre, lærer, helsesykepleier)
+4) AVSLUTT MED 2-3 KONKRETE RESSURSER. Velg KUN fra katalogen under
+   (HJELPETJENESTER), og plukk de 2-3 tilbudene som passer BEST til denne
+   konkrete situasjonen og spørsmålet. Match SITUASJONSTYPEN (f.eks. egne
+   seksuelle tanker/handlinger, deling av bilder, overvåking, trusler) mot
+   "Når relevant"-teksten og stikkordene, og ta alltid med det tilbudet som
+   mest spesifikt dekker situasjonstypen – ikke bare de generelle
+   samtaletilbudene. Ta med navn og kontaktinfo (telefon og/eller nettside)
+   nøyaktig slik det står i katalogen. Ikke finn opp tilbud, telefonnumre
+   eller lenker som ikke står der.
+
+HJELPETJENESTER (velg fra disse):
+{tjenester_katalog}
 
 FORMAT:
 - Norsk bokmål
@@ -175,18 +272,30 @@ DU SKAL:
    realistisk bilde av hva som kan skje videre. Ikke love at konsekvensene
    blir små.
 
-3) GI KONKRETE NESTE STEG, tilpasset hva som er gjort:
-   - **Stoppe videre skade** først: hvis bilder/informasjon er spredt,
-     **[Slettmeg.no](https://slettmeg.no)** kan hjelpe med å fjerne det.
-     Slett alt selv også.
-   - **Snakk med en voksen du stoler på** så raskt som mulig (foreldre,
-     helsesykepleier, lærer). De kan hjelpe deg gjennom dette.
-   - **Vurder å kontakte politiet eller advokat** før noen andre gjør det.
-     Å selv ta initiativ blir ofte sett på som formildende.
+3) GI KONKRETE NESTE STEG, tilpasset hva som er gjort. Bygg stegene rundt
+   disse prinsippene, i denne rekkefølgen:
+   - **Stoppe videre skade** først (f.eks. fjerne spredte bilder/opplysninger,
+     slette alt selv).
+   - **Snakk med en voksen du stoler på** så raskt som mulig.
+   - **Vurder å kontakte politiet eller advokat** før noen andre gjør det –
+     å selv ta initiativ blir ofte sett på som formildende.
    - **Tenk på den som er rammet**: hvordan kan du begrense skaden for hen?
-     Det kan inkludere å beklage direkte eller via en voksen.
-   - **Få hjelp selv**: Mental Helse Ungdom **116 123**, Kors på halsen
-     **16 111**.
+   - **Få hjelp for egen atferd**: hvis det brukeren har gjort handler om
+     egne seksuelle tanker eller handlinger mot en annen (f.eks. en seksuell
+     krenkelse eller grenseoverskridelse), MÅ du ta med det fagtilbudet i
+     katalogen som spesifikt behandler problematisk/skadelig seksuell atferd.
+   - **Få hjelp selv** hvis du trenger noen å snakke med.
+   Knytt stegene til 2-4 KONKRETE tilbud du velger fra katalogen under
+   (HJELPETJENESTER) – de som passer BEST til hva brukeren faktisk har gjort.
+   Match SITUASJONSTYPEN (f.eks. seksuell krenkelse, deling av bilder,
+   overvåking, trusler) mot "Når relevant"-teksten og stikkordene, og ta
+   alltid med det tilbudet som mest spesifikt dekker situasjonstypen – ikke
+   bare de generelle samtaletilbudene. Ta med navn og kontaktinfo (telefon
+   og/eller nettside) nøyaktig slik det står i katalogen. Ikke finn opp
+   tilbud, telefonnumre eller lenker som ikke står der.
+
+HJELPETJENESTER (velg fra disse):
+{tjenester_katalog}
 
 4) IKKE moraliser, IKKE foreslå ting du ikke vet vil hjelpe, IKKE love at
    konsekvensene blir små, IKKE beskriv hvordan handlingen kunne vært gjort
@@ -345,16 +454,26 @@ ALVORLIGHESGRAD settes i Severity.
 
 4) Avgjør brukerens ROLLE i situasjonen og sett feltet 'stance' til én av:
    - 'info_seeker'    : Ber om generell informasjon, kunnskap eller råd. Ingen konkret aktør beskrevet, eller brukeren spør på vegne av seg selv om noe nøytralt.
-   - 'affected_party' : Brukeren beskriver noe som rammer hen selv (offer, presset, redd, bekymret for egen situasjon). Eks: «eksen min truer med å dele nakenbilder av meg», «noen presser meg til å sende bilder», «jeg ble lurt».
-   - 'harm_to_others' : Brukeren beskriver eller spør om hvordan hen selv kan utføre en handling som er **ulovlig** eller åpenbart skadelig mot en annen person. Aktøren er BRUKEREN, og målet er en TREDJEPART. Dette gjelder uavhengig av hvor mildt formulert spørsmålet er.
-     Eksempler på 'harm_to_others':
+   - 'affected_party' : Brukeren er OFFERET — noen ANDRE har gjort, eller truer med å gjøre, noe skadelig mot brukeren. Brukeren beskriver noe som rammer hen selv (offer, presset, redd, bekymret for egen situasjon). Eks: «eksen min truer med å dele nakenbilder av meg», «noen presser meg til å sende bilder», «jeg ble lurt».
+     VIKTIG: Bruk IKKE 'affected_party' bare fordi brukeren uttrykker anger, skyld, redsel eller ber om hjelp. Hvis brukeren er den som HAR UTFØRT den skadelige handlingen mot en annen, er det 'harm_to_others' — selv om hen angrer eller er fortvilet.
+   - 'harm_to_others' : Brukeren selv er AKTØREN i en handling som er **ulovlig** eller åpenbart skadelig mot en annen person (TREDJEPART). Dette dekker BÅDE (a) at brukeren planlegger/spør hvordan hen kan utføre handlingen, OG (b) at brukeren AVSLØRER at hen allerede HAR gjort noe skadelig mot en annen og søker hjelp, råd eller veiledning etterpå. Gjelder uavhengig av hvor mildt formulert, og uavhengig av om brukeren angrer.
+     Eksempler på 'harm_to_others' (planlegger):
        • «har nakenbilder av eksen, vil at alle på skolen skal se dem, hva er enkleste måten?»
        • «hvordan kan jeg dele nakenbilder av en jente uten at hun vet?»
        • «hvordan presser jeg kjæresten til å sende nudes?»
        • «hvordan filmer jeg noen i dusjen uten at de merker det?»
        • «hvordan får jeg en jente til å ha sex med meg selv om hun ikke vil?»
        • «hvordan sender jeg trusler anonymt?»
-     SKILL TYDELIG: «eksen min vil dele nakenbilder av meg» = 'affected_party'. «jeg vil dele nakenbilder av eksen» = 'harm_to_others'.
+     Eksempler på 'harm_to_others' (har allerede gjort det, søker hjelp):
+       • «jeg tror jeg har krenket noen seksuelt, hva kan gjøres?»
+       • «jeg har delt nakenbilder av eksen, hva gjør jeg nå?»
+       • «jeg presset kjæresten min til noe seksuelt, jeg angrer»
+       • «jeg truet en venn, og nå er jeg redd for hva som skjer»
+     SKILL TYDELIG (hvem er AKTØR, hvem er MÅL?):
+       • «eksen min vil dele nakenbilder av meg» = 'affected_party' (brukeren er målet).
+       • «jeg vil dele nakenbilder av eksen» = 'harm_to_others' (brukeren er aktøren).
+       • «jeg ble krenket seksuelt» = 'affected_party' (brukeren er offeret).
+       • «jeg har krenket noen seksuelt» = 'harm_to_others' (brukeren er aktøren, en annen er offeret) — også når brukeren angrer og ber om hjelp.
    - 'ambiguous'      : Det er ikke mulig å si hvem som er aktør og hvem som er målet.
    Når i tvil mellom 'info_seeker' og 'harm_to_others': velg 'harm_to_others' hvis spørsmålet inneholder en konkret intensjon om å utføre handlingen («jeg vil …», «hva er enkleste måten å …», «hvordan får jeg gjort …»). Velg 'info_seeker' hvis det er rent kunnskaps­spørsmål («hva sier loven om …», «er det lov å …»).
 

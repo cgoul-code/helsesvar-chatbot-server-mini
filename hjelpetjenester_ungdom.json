@@ -1,0 +1,181 @@
+{
+  "_kommentar": "Oversikt over hjelpetjenester for ungdom i Norge. Brukes til aa velge relevante ressurser i harm-svar (refuse_harm_to_others og help_after_harm). Kilde: Hjeleptjenester_ungdom.xlsx",
+  "tjenester": [
+    {
+      "id": "mental-helse-ungdom",
+      "navn": "Mental Helse Ungdom",
+      "beskrivelse": "Organisasjon for unge opp til 36 år. Frivillige chatverter lytter og støtter om stort og smått. Hjelpechat åpen man–tors kl. 18–21, fre–lør kl. 19–21, søn kl. 18–21 (se nettsiden for oppdaterte tider). Døgnåpen telefon dekkes av Mental Helses Hjelpetelefon 116 123.",
+      "naar_relevant": "Når du har det vanskelig psykisk, er ensom, sliter med mørke tanker, eller bare trenger noen å prate med anonymt – uten å måtte forklare seg til noen du kjenner.",
+      "nettside": "mentalhelseungdom.no",
+      "telefon": "116 123 (døgnåpen)",
+      "tags": [
+        "psykisk_helse",
+        "ensomhet",
+        "moerke_tanker",
+        "anonym",
+        "generell_stoette"
+      ]
+    },
+    {
+      "id": "kors-paa-halsen",
+      "navn": "Kors på halsen (Røde Kors)",
+      "beskrivelse": "Gratis og anonymt samtaletilbud for barn og unge under 18 år. Frivillige voksne med opplæring i samtaleteknikk. Taushetsplikt. Telefon åpen man–fre kl. 14–22. Kan snakke om følelser, vennskap, familie, skole eller vanskelige ting.",
+      "naar_relevant": "Når du er under 18 år og trenger noen å snakke med om noe stort eller lite – uten at noen får vite hvem du er.",
+      "nettside": "korspaahalsen.rodekors.no",
+      "telefon": "800 33 321",
+      "tags": [
+        "under_18",
+        "generell_stoette",
+        "vennskap",
+        "familie",
+        "skole",
+        "foelelser",
+        "anonym"
+      ]
+    },
+    {
+      "id": "politiet-ikke-akutt",
+      "navn": "Politiet (ikke-akutt)",
+      "beskrivelse": "Politiets ikke-akutte linje for råd og hjelp i situasjoner som ikke er nødstilfeller. Kan hjelpe med å anmelde lovbrudd, gi informasjon om rettigheter og hva som er ulovlig.",
+      "naar_relevant": "Når du vil anmelde deling av bilder uten samtykke (\"hevnporno\"), trusler, nettmobbing, eller trenger råd om hva politiet kan gjøre – men situasjonen ikke er akutt.",
+      "nettside": "Ingen nettside – kun telefon",
+      "telefon": "02800",
+      "tags": [
+        "deling_av_bilder",
+        "trusler",
+        "nettmobbing",
+        "anmeldelse",
+        "juridisk",
+        "utfoert_skade"
+      ]
+    },
+    {
+      "id": "politiet-akutt",
+      "navn": "Politiet (akutt fare)",
+      "beskrivelse": "Nødtelefonen til politiet. Politiet rykker ut umiddelbart ved akutte hendelser.",
+      "naar_relevant": "Når du eller noen andre er i umiddelbar fare – ved pågående vold, overgrep, alvorlige trusler eller andre nødsituasjoner.",
+      "nettside": "Ingen nettside – kun telefon",
+      "telefon": "112",
+      "tags": [
+        "akutt",
+        "vold",
+        "overgrep",
+        "fare",
+        "noedsituasjon"
+      ]
+    },
+    {
+      "id": "sex-og-samfunn",
+      "navn": "Sex og samfunn",
+      "beskrivelse": "Norges største senter for seksuell og reproduktiv helse. Chatverter er utdannede sykepleiere, helsesykepleiere, sexologiske rådgivere og psykiatriske sykepleiere. Gratis tjenester for unge opp til 25 år. Chat åpen man–tors kl. 10–18.",
+      "naar_relevant": "Spørsmål om prevensjon, seksuelt overførbare sykdommer, kropp, grenser, overgrep, seksualitet og identitet – anonymt og uten å bestille time.",
+      "nettside": "sexogsamfunn.no",
+      "telefon": "Ingen – kun chat",
+      "tags": [
+        "seksuell_helse",
+        "prevensjon",
+        "soa",
+        "kropp",
+        "grenser",
+        "overgrep",
+        "identitet",
+        "anonym"
+      ]
+    },
+    {
+      "id": "snakk-med-noen-du-stoler-paa",
+      "navn": "Snakk med noen du stoler på – venn, voksen eller helsesykepleier",
+      "beskrivelse": "Helsesykepleier på skolen er utdannet til å hjelpe ungdom med psykisk helse, kropp, seksualitet, rus og sosiale problemer, og kan henvise videre. En venn eller voksen du stoler på gir støtte og sørger for at du ikke bærer ting alene.",
+      "naar_relevant": "I alle situasjoner – særlig når du trenger oppfølging over tid, ikke bare én samtale. Lav terskel og alltid tilgjengelig på skolen.",
+      "nettside": "Ingen egen nettside",
+      "telefon": "Ingen – personlig samtale",
+      "tags": [
+        "voksen",
+        "helsesykepleier",
+        "oppfoelging",
+        "generell_stoette",
+        "tillit"
+      ]
+    },
+    {
+      "id": "slettmeg",
+      "navn": "Slettmeg.no",
+      "beskrivelse": "Råd- og veiledningstjeneste drevet av NorSIS (Norsk senter for informasjonssikring). Hjelper med å få fjernet uønsket innhold fra nett – bilder, filmer eller personlig informasjon. Erfarne rådgivere med kompetanse innen informasjonssikkerhet og personvern.",
+      "naar_relevant": "Når noen har delt bilder eller private opplysninger om deg uten samtykke, ved nettmobbing, eller når du vil ha noe slettet fra sosiale medier eller nettsider.",
+      "nettside": "slettmeg.no",
+      "telefon": "911 29 392",
+      "tags": [
+        "deling_av_bilder",
+        "nettmobbing",
+        "personvern",
+        "fjerne_innhold",
+        "utfoert_skade"
+      ]
+    },
+    {
+      "id": "amathea",
+      "navn": "Amathea",
+      "beskrivelse": "Gratis veiledningstjeneste bemannet av fagpersoner med helse- og sosialfaglig bakgrunn. Gir nøytral og trygg samtale om graviditet, abort, kropp, samliv og seksualitet. Kan også snakke om situasjoner der grenser er overskredet eller man er usikker på hva som har skjedd.",
+      "naar_relevant": "Når man har spørsmål om graviditet, sex eller vanskelige opplevelser knyttet til kropp og grenser, eller trenger noen å snakke med før man eventuelt involverer voksne.",
+      "nettside": "amathea.no",
+      "telefon": "90 65 90 60",
+      "tags": [
+        "graviditet",
+        "abort",
+        "seksuell_helse",
+        "kropp",
+        "grenser",
+        "samliv"
+      ]
+    },
+    {
+      "id": "alarmtelefonen-barn-unge",
+      "navn": "Alarmtelefonen for barn og unge",
+      "beskrivelse": "Døgnåpen tjeneste bemannet av fagpersoner med barnevernfaglig kompetanse. Gir råd, støtte og vurderer behov for videre hjelp. Kan kontakte barnevern og nødetater ved behov",
+      "naar_relevant": "Når det er akutt, eller når man trenger hjelp raskt i en vanskelig eller farlig situasjon. Også relevant hvis man ikke vet hvem man ellers kan kontakte.",
+      "nettside": "www.116111.no",
+      "telefon": "116 111",
+      "tags": [
+        "akutt",
+        "barnevern",
+        "fare",
+        "under_18",
+        "vet_ikke_hvem"
+      ]
+    },
+    {
+      "id": "tryggprat",
+      "navn": "Tryggprat",
+      "beskrivelse": "Fagfolk som jobber med behandling (veiledning) av problematisk og skadelig seksuell atferd hos barn og unge",
+      "naar_relevant": "Når man er bekymret for egne seksuelle tanker eller handlinger, eller har gjort noe seksuelt mot en annen som var over grensa eller krenkende, og vil ha hjelp til å forstå og endre atferden.",
+      "nettside": "www.tryggprat.no",
+      "telefon": "55 50 73 00",
+      "tags": [
+        "skadelig_seksuell_atferd",
+        "egne_seksuelle_tanker",
+        "egne_seksuelle_handlinger",
+        "krenket_noen_seksuelt",
+        "seksuell_grenseoverskridelse",
+        "overgrep_forebygging",
+        "bekymret_for_seg_selv"
+      ]
+    },
+    {
+      "id": "ungdomstelefonen-skeiv-ungdom",
+      "navn": "Ungdomstelefonen - Skeiv Ungdom",
+      "beskrivelse": "Tilbud drevet av Skeiv Ungdom, bemannet av frivillige unge voksne (18–30 år) med opplæring og egenerfaring. Anonym støtte til unge opp til 30 år om identitet, kropp, grenser og vanskelige opplevelser, inkludert overgrep og utrygge relasjoner. Telefon søn–fre kl. 18–22; chat enkelte ukedager (se nettsiden).",
+      "naar_relevant": "Når man trenger noen som forstår spørsmål om kjønn, seksualitet og grenser, eller vil snakke anonymt om vanskelige erfaringer.",
+      "nettside": "skeivungdom.no/prosjekter/ungdomstelefonen",
+      "telefon": "400 00 777",
+      "tags": [
+        "identitet",
+        "seksualitet",
+        "kjoenn",
+        "grenser",
+        "overgrep",
+        "lhbtq",
+        "anonym"
+      ]
+    }
+  ]
+}

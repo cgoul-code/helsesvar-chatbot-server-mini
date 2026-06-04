@@ -99,5 +99,17 @@
   {
     "question": "jeg lurte ei jente til å sende nakenbilder ved å late som jeg var noen andre, hva risikerer jeg?",
     "stance": "harm_to_others - completed"
+  },
+  {
+    "question": "Hei, jeg tror jeg har krenket noen seksuelt, hva kan gjøres",
+    "stance": "harm_to_others - completed"
+  },
+  {
+    "question": "jeg har gjort noe seksuelt mot en annen som jeg tror var over grensa, hva nå?",
+    "stance": "harm_to_others - completed"
+  },
+  {
+    "question": "jeg presset kjæresten min til noe seksuelt, og nå angrer jeg veldig",
+    "stance": "harm_to_others - completed"
   }
 ]

@@ -16,7 +16,9 @@
       "PowerShell(python -m pip install python-docx --quiet 2>&1)",
       "PowerShell(python -c \"import docx; print\\('OK', docx.__version__\\)\")",
       "PowerShell(python generate_platform_doc.py)",
-      "Bash(python -c \"import pandas; print\\(pandas.__version__\\)\")"
+      "Bash(python -c \"import pandas; print\\(pandas.__version__\\)\")",
+      "Bash(ls data *)",
+      "Bash(ls config *)"
     ],
     "additionalDirectories": [
       "c:\\Users\\ChristianGoulignac\\vscode\\llama\\chatbot-client-HEI20-v2\\client\\src"

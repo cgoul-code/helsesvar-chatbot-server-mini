@@ -44,6 +44,9 @@ from registry import (
     HELP_AFTER_HARM_SHORT_ANSWER,
     REFUSE_HARM_PROMPT,
     HELP_AFTER_HARM_PROMPT,
+    HJELPETJENESTER_KATALOG,
+    HJELPETJENESTER_BY_ID,
+    format_hjelpetjeneste_linje,
 )
 
 # Gyldige response-style-verdier. 'factual' = skip rewrite. Hvis klienten
@@ -880,6 +883,107 @@ def route_after_analysis(state: State_Answer) -> str:
     return "fast_single"
 
 
+# Enkelte fagtilbud er så situasjonsspesifikke at de aldri bør falle ut av et
+# harm-svar. LLM-seleksjonen i harm-grenene er instruksjonsdrevet og kan bomme;
+# disse deterministiske reglene garanterer at riktig tilbud kommer med. Vi er
+# allerede inne i harm_to_others her, så aktøren er brukeren – derfor holder det
+# å oppdage situasjonstypen i spørsmålet/historikken.
+
+# Brukerens egen (mulige) seksuelle krenkelse/grenseoverskridelse (kontakt/
+# atferd, ikke bare bildedeling) → Tryggprat. Rene bildesaker dekkes av
+# Slettmeg-regelen under, så bilde-substantiver ligger ikke her.
+_SEXUAL_HARM_PATTERNS = re.compile(
+    r"(krenk\w*|overgrep\w*|voldt\w*|misbruk\w*|seksuell?\w*|seksuelt|"
+    r"blott\w*|tafs\w*|befølt?\w*|grenseoverskrid\w*|"
+    r"ufrivillig\s+sex|tvang\w*\s+til\s+sex)",
+    re.IGNORECASE,
+)
+
+# Bilder/film/private opplysninger involvert → Slettmeg.no (fjerne innhold).
+# Krever et innholds-substantiv (ikke bare et delings-verb), så «spredte
+# rykter» o.l. ikke feilutløser tilbudet.
+_IMAGE_SHARING_PATTERNS = re.compile(
+    r"(nakenbild\w*|nudes?|sexbild\w*|bilde\w*|bilder|video\w*|film\w*|"
+    r"filmet|skjermbild\w*|opptak|klipp|"
+    r"private\s+opplysning\w*|privat\s+info)",
+    re.IGNORECASE,
+)
+
+# Pågående/umiddelbar fare akkurat nå → Politiet (akutt fare) / 112.
+_ACUTE_DANGER_PATTERNS = re.compile(
+    r"(akkurat\s+nå|pågår|holder\s+på\s+(med\s+)?å|umiddelbar\s+fare|"
+    r"skal\s+til\s+å|er\s+i\s+fare|i\s+livsfare|"
+    r"truer\s+med\s+å\s+(drepe|skade|ta\s+livet)|"
+    r"kommer\s+til\s+å\s+(skade|drepe))",
+    re.IGNORECASE,
+)
+
+
+def _matches(pattern: re.Pattern, *texts: str) -> bool:
+    blob = " ".join(t for t in texts if t)
+    return bool(pattern.search(blob))
+
+
+def _ensure_service_in_answer(answer: str, service_id: str, blurb: str = "") -> str:
+    """Garanter at et bestemt tilbud er nevnt i svaret; injiser hvis ikke.
+
+    Hopper over hvis tilbudet allerede er nevnt – på navn, domene eller
+    telefonnummer (sifre) – så vi ikke dupliserer det LLM-en eventuelt
+    allerede tok med.
+    """
+    svc = HJELPETJENESTER_BY_ID.get(service_id)
+    if not svc or not answer:
+        return answer
+    navn = (svc.get("navn") or "").lower()
+    nett = (svc.get("nettside") or "").lower().replace("www.", "")
+    nett_ok = bool(nett) and not nett.startswith("ingen")
+    tlf_digits = re.sub(r"\D", "", svc.get("telefon") or "")
+    haystack = answer.lower()
+    answer_digits = re.sub(r"\D", "", answer)
+    already = (
+        (navn and navn in haystack)
+        or (nett_ok and nett in haystack)
+        or (len(tlf_digits) >= 3 and tlf_digits in answer_digits)
+    )
+    if already:
+        return answer
+    linje = format_hjelpetjeneste_linje(svc, blurb=blurb)
+    if not linje:
+        return answer
+    return answer.rstrip() + "\n" + linje
+
+
+# (predikat, service_id, blurb) – evalueres i rekkefølge. Blurb tom => bruk
+# tilbudets egen «Når relevant»-tekst (forkortet).
+_HARM_SERVICE_RULES = [
+    (
+        _SEXUAL_HARM_PATTERNS,
+        "tryggprat",
+        "hjelp og veiledning hvis du er bekymret for egne seksuelle tanker "
+        "eller handlinger, eller har gjort noe over grensa mot en annen",
+    ),
+    (
+        _IMAGE_SHARING_PATTERNS,
+        "slettmeg",
+        "hjelp til å få fjernet bilder eller private opplysninger som er "
+        "spredt på nett",
+    ),
+    (
+        _ACUTE_DANGER_PATTERNS,
+        "politiet-akutt",
+        "ring umiddelbart hvis noen er i akutt fare akkurat nå",
+    ),
+]
+
+
+def _inject_specialized_harm_services(answer: str, *context_texts: str) -> str:
+    """Legg til situasjonsspesifikke fagtilbud som ikke bør utelates."""
+    for pattern, service_id, blurb in _HARM_SERVICE_RULES:
+        if _matches(pattern, *context_texts):
+            answer = _ensure_service_in_answer(answer, service_id, blurb)
+    return answer
+
+
 def refuse_harm_to_others(state: State_Answer) -> Dict[str, Any]:
     """Konstruktivt avslag når brukeren PLANLEGGER å skade andre.
 
@@ -899,13 +1003,17 @@ def refuse_harm_to_others(state: State_Answer) -> Dict[str, Any]:
             query=query,
             tense=tense,
             conversation_str=conversation_str,
+            tjenester_katalog=HJELPETJENESTER_KATALOG,
         )
         result, in_tokens, out_tokens = _invoke_with_usage(
             llm.with_structured_output(RefusalResponse),
             prompt_value,
         )
+        final_answer = _inject_specialized_harm_services(
+            result.answer, query, conversation_str
+        )
         return {
-            "final_answer": result.answer,
+            "final_answer": final_answer,
             "final_short_answer": result.short_answer,
             "references": [],
             "validate_response_result": "Accepted",
@@ -915,7 +1023,9 @@ def refuse_harm_to_others(state: State_Answer) -> Dict[str, Any]:
     except Exception as e:
         logging.error("refuse_harm_to_others LLM call failed, using static fallback: %s", e)
         return {
-            "final_answer": HARM_REFUSAL_ANSWER,
+            "final_answer": _inject_specialized_harm_services(
+                HARM_REFUSAL_ANSWER, query, conversation_str
+            ),
             "final_short_answer": HARM_REFUSAL_SHORT_ANSWER,
             "references": [],
             "validate_response_result": "Accepted",
@@ -941,13 +1051,17 @@ def help_after_harm(state: State_Answer) -> Dict[str, Any]:
         prompt_value = HELP_AFTER_HARM_PROMPT.format(
             query=query,
             conversation_str=conversation_str,
+            tjenester_katalog=HJELPETJENESTER_KATALOG,
         )
         result, in_tokens, out_tokens = _invoke_with_usage(
             llm.with_structured_output(RefusalResponse),
             prompt_value,
         )
+        final_answer = _inject_specialized_harm_services(
+            result.answer, query, conversation_str
+        )
         return {
-            "final_answer": result.answer,
+            "final_answer": final_answer,
             "final_short_answer": result.short_answer,
             "references": [],
             "validate_response_result": "Accepted",
@@ -957,7 +1071,9 @@ def help_after_harm(state: State_Answer) -> Dict[str, Any]:
     except Exception as e:
         logging.error("help_after_harm LLM call failed, using static fallback: %s", e)
         return {
-            "final_answer": HELP_AFTER_HARM_ANSWER,
+            "final_answer": _inject_specialized_harm_services(
+                HELP_AFTER_HARM_ANSWER, query, conversation_str
+            ),
             "final_short_answer": HELP_AFTER_HARM_SHORT_ANSWER,
             "references": [],
             "validate_response_result": "Accepted",
