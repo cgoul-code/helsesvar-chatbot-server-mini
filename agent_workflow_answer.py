@@ -42,8 +42,11 @@ from registry import (
     HARM_REFUSAL_SHORT_ANSWER,
     HELP_AFTER_HARM_ANSWER,
     HELP_AFTER_HARM_SHORT_ANSWER,
+    PREJUDICE_ANSWER,
+    PREJUDICE_SHORT_ANSWER,
     REFUSE_HARM_PROMPT,
     HELP_AFTER_HARM_PROMPT,
+    ADDRESS_PREJUDICE_PROMPT,
     HJELPETJENESTER_KATALOG,
     HJELPETJENESTER_BY_ID,
     format_hjelpetjeneste_linje,
@@ -156,7 +159,7 @@ class State_Answer(TypedDict):
     refined_query: str
     main_category: str
     query_severity: Literal["Green", "Yellow", "Red", ""]
-    stance: Literal["info_seeker", "affected_party", "harm_to_others", "ambiguous"]
+    stance: Literal["info_seeker", "affected_party", "harm_to_others", "expresses_prejudice", "ambiguous"]
     harm_to_others_tense: Literal["planning", "completed", "unclear", "na"]
     # Response-style. Tom streng = auto-rute via pick_response_style(). En
     # av RESPONSE_STYLES = klient-override som hopper over auto-routingen.
@@ -231,13 +234,15 @@ class QueryPlan(BaseModel):
         description=(
             "Define the severity (ALVORLIGHESGRAD) for the query")
     )
-    stance: Literal["info_seeker", "affected_party", "harm_to_others", "ambiguous"] = Field(
+    stance: Literal["info_seeker", "affected_party", "harm_to_others", "expresses_prejudice", "ambiguous"] = Field(
         default="info_seeker",
         description=(
             "Brukerens rolle i situasjonen: 'info_seeker' (ber om generell info), "
             "'affected_party' (beskriver noe som rammer brukeren selv), "
             "'harm_to_others' (ber om hjelp til å påføre andre skade — straffbart "
-            "eller åpenbart skadelig), eller 'ambiguous' (uklart hvem som er aktør)."
+            "eller åpenbart skadelig), 'expresses_prejudice' (uttrykker en fordom "
+            "eller nedvurderende holdning mot en gruppe), eller 'ambiguous' (uklart "
+            "hvem som er aktør)."
         ),
     )
     harm_to_others_tense: Literal["planning", "completed", "unclear", "na"] = Field(
@@ -666,11 +671,20 @@ def _verify_claims(
                 all_citations_valid = False
 
             matched_urls: List[str] = []
+            matched_texts: List[str] = []
+            seen_texts: set = set()
             for n in matched_nodes_for_cit:
                 try:
                     matched_urls.append(n.metadata.get("url", "Ingen URL"))
                 except Exception:
                     matched_urls.append("Ingen URL")
+                # Keep the full source passage so the entailment gate can resolve
+                # pronouns / elliptical references ("Det avgjøres av...") that the
+                # bare quote leaves dangling. Dedupe + cap to keep prompts small.
+                node_txt = (_node_text(n) or "").strip()
+                if node_txt and node_txt not in seen_texts:
+                    seen_texts.add(node_txt)
+                    matched_texts.append(node_txt[:1500])
 
             citations_report.append({
                 "citation_index": cit_i,
@@ -679,6 +693,7 @@ def _verify_claims(
                 "found_in_nodes": found_in_nodes,
                 "problems": this_cit_problems,
                 "matched_node_urls": matched_urls,
+                "matched_node_texts": matched_texts,
             })
 
         per_claim_problems.extend(cite_check["problems"])
@@ -878,6 +893,8 @@ def route_after_analysis(state: State_Answer) -> str:
         if tense == "completed":
             return "help_after_harm"
         return "refuse_harm_to_others"
+    if state.get("stance") == "expresses_prejudice":
+        return "address_prejudice"
     if state.get("needs_subqueries"):
         return "orchestrator"
     return "fast_single"
@@ -1082,6 +1099,51 @@ def help_after_harm(state: State_Answer) -> Dict[str, Any]:
         }
 
 
+def address_prejudice(state: State_Answer) -> Dict[str, Any]:
+    """Svar når brukeren uttrykker en fordom/holdning mot en gruppe.
+
+    Egen gren (parallelt med harm-nodene) fordi et rent RAG-svar bare kan
+    gjengi det retrieval henter — for «jeg liker ikke homofile» henter det
+    typisk «aksepter deg selv»-artikler og feiltolker brukeren som om hen
+    strever med egen identitet. Denne noden resonnerer fritt: møter ubehaget
+    uten å validere fordommen, og slår fast andres likeverd og rett til å
+    være den de er. LLM-drevet, faller tilbake til statisk melding ved feil.
+    """
+    _emit("Stance=expresses_prejudice: address_prejudice node", event="info")
+
+    llm = state["llm"]
+    query = state.get("refined_query") or state.get("query") or ""
+    conversation_str = state.get("conversation_str", "") or ""
+
+    try:
+        prompt_value = ADDRESS_PREJUDICE_PROMPT.format(
+            query=query,
+            conversation_str=conversation_str,
+        )
+        result, in_tokens, out_tokens = _invoke_with_usage(
+            llm.with_structured_output(RefusalResponse),
+            prompt_value,
+        )
+        return {
+            "final_answer": result.answer,
+            "final_short_answer": result.short_answer,
+            "references": [],
+            "validate_response_result": "Accepted",
+            "input_tokens": in_tokens,
+            "output_tokens": out_tokens,
+        }
+    except Exception as e:
+        logging.error("address_prejudice LLM call failed, using static fallback: %s", e)
+        return {
+            "final_answer": PREJUDICE_ANSWER,
+            "final_short_answer": PREJUDICE_SHORT_ANSWER,
+            "references": [],
+            "validate_response_result": "Accepted",
+            "input_tokens": 0,
+            "output_tokens": 0,
+        }
+
+
 # ---------------------------------------------------------
 # Entailment-gate: et sitat kan finnes ordrett i kilden uten å støtte
 # påstanden (f.eks. et p-stav-sitat brukt på en p-plaster-påstand). Sitat-
@@ -1100,17 +1162,22 @@ class _EntailmentResult(BaseModel):
 
 
 ENTAILMENT_PROMPT = (
-    "Du er en streng faktasjekker. For hver PÅSTAND får du ett eller flere SITAT "
-    "som er hentet ordrett fra kildene. Avgjør om sitatet/sitatene FAKTISK STØTTER "
-    "påstanden — altså om de handler om SAMME tiltak/forhold og logisk medfører "
-    "påstanden.\n"
-    "- Et sitat som handler om noe ANNET (for eksempelet annet produkt/prevensjonsmiddel, en "
-    "annen aldersgruppe, en annen ordning) støtter IKKE påstanden, selv om noen ord "
-    "er like.\n"
+    "Du er en presis faktasjekker. For hver PÅSTAND får du ett eller flere SITAT "
+    "(hentet ordrett fra kildene) og KILDETEKSTEN sitatet er klippet fra. "
+    "Avgjør om kilden FAKTISK STØTTER påstanden — altså om den handler om SAMME "
+    "tiltak/forhold og logisk medfører påstanden.\n"
+    "- Sitatet er bare et utdrag. Bruk KILDETEKSTEN til å forstå sammenhengen og "
+    "til å tolke pronomen og henvisninger i sitatet (f.eks. «Det», «den», «slik»). "
+    "Hvis kildeteksten gjør det klart hva sitatet viser til, og den støtter "
+    "påstanden, så er den supported=true — selv om det løsrevne sitatet alene "
+    "virker uklart.\n"
+    "- Marker supported=false bare når kilden egentlig handler om noe ANNET "
+    "(annet produkt/prevensjonsmiddel, annen aldersgruppe, annen ordning) eller "
+    "motsier påstanden — ikke fordi det korte sitatet mangler kontekst.\n"
     "- Vær spesielt streng på forveksling av ulike, men beslektede ting "
     "(f.eks. p-stav vs p-plaster vs p-pille).\n"
     "Returner for hver indeks om den er supported (true/false).\n\n"
-    "Påstander og sitater:\n"
+    "Påstander, sitater og kildetekst:\n"
 )
 
 
@@ -1145,29 +1212,44 @@ def _apply_entailment_gate(claims_report: List[Dict[str, Any]], llm) -> Tuple[in
     flags as suspicious. Fails open: any error keeps the existing string-match
     validity. Returns (input_tokens, output_tokens) consumed.
     """
-    candidates: List[Tuple[Dict[str, Any], List[str]]] = []
+    candidates: List[Tuple[Dict[str, Any], List[str], List[str]]] = []
     for ce in claims_report:
         if not ce.get("any_citation_valid"):
             continue
-        quotes = [
-            (c.get("quote") or "").strip()
-            for c in ce.get("citations_report", [])
-            if c.get("found_in_nodes") and (c.get("quote") or "").strip()
-        ]
+        quotes: List[str] = []
+        sources: List[str] = []
+        seen_src: set = set()
+        for c in ce.get("citations_report", []):
+            if not c.get("found_in_nodes"):
+                continue
+            q = (c.get("quote") or "").strip()
+            if q:
+                quotes.append(q)
+            # Collect the source passage(s) the quote was matched in, so the LLM
+            # can resolve context-dependent quotes instead of judging them blind.
+            for txt in (c.get("matched_node_texts") or []):
+                txt = (txt or "").strip()
+                if txt and txt not in seen_src:
+                    seen_src.add(txt)
+                    sources.append(txt)
         if not quotes:
             continue
         if not _entailment_needed(ce.get("claim_text", ""), quotes):
             continue
-        candidates.append((ce, quotes))
+        candidates.append((ce, quotes, sources))
 
     if not candidates:
         return 0, 0
 
     lines = []
-    for i, (ce, quotes) in enumerate(candidates):
+    for i, (ce, quotes, sources) in enumerate(candidates):
         joined = " | ".join(quotes)
-        lines.append(f"{i}. PÅSTAND: {ce.get('claim_text', '')}\n   SITAT: {joined}")
-    prompt = ENTAILMENT_PROMPT + "\n".join(lines)
+        block = f"{i}. PÅSTAND: {ce.get('claim_text', '')}\n   SITAT: {joined}"
+        if sources:
+            joined_src = "\n   ---\n   ".join(sources)
+            block += f"\n   KILDETEKST:\n   {joined_src}"
+        lines.append(block)
+    prompt = ENTAILMENT_PROMPT + "\n\n".join(lines)
 
     try:
         res, in_tok, out_tok = _invoke_with_usage(
@@ -1178,7 +1260,7 @@ def _apply_entailment_gate(claims_report: List[Dict[str, Any]], llm) -> Tuple[in
         logging.error("Entailment batch call failed, keeping string-match validity: %s", e)
         return 0, 0
 
-    for i, (ce, _quotes) in enumerate(candidates):
+    for i, (ce, _quotes, _sources) in enumerate(candidates):
         # Default True = don't downgrade a claim the model didn't return a verdict for.
         if supported.get(i, True):
             continue
@@ -2165,6 +2247,7 @@ builder.add_node("related_queries_dialog_from_query", related_queries_dialog_fro
 builder.add_node("apply_response_style", apply_response_style)
 builder.add_node("refuse_harm_to_others", refuse_harm_to_others)
 builder.add_node("help_after_harm", help_after_harm)
+builder.add_node("address_prejudice", address_prejudice)
 
 # Start → analyse
 builder.add_edge(START, "analyze_query")
@@ -2173,7 +2256,7 @@ builder.add_edge(START, "analyze_query")
 builder.add_conditional_edges(
     "analyze_query",
     route_after_analysis,
-    ["fast_single", "orchestrator", "refuse_harm_to_others", "help_after_harm"],
+    ["fast_single", "orchestrator", "refuse_harm_to_others", "help_after_harm", "address_prejudice"],
 )
 
 # Hvis multi: bruk eksisterende flyt
@@ -2192,6 +2275,7 @@ builder.add_edge("fast_single", "apply_response_style")
 # – ikke et refusal/help-svar som allerede har riktig tone.
 builder.add_edge("refuse_harm_to_others", "emit_query_answer_references")
 builder.add_edge("help_after_harm", "emit_query_answer_references")
+builder.add_edge("address_prejudice", "emit_query_answer_references")
 
 # Videre er likt for begge ruter
 builder.add_edge("emit_query_answer_references", "related_queries_dialog_from_query")

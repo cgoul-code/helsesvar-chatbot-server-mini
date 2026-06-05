@@ -163,6 +163,29 @@ HELP_AFTER_HARM_SHORT_ANSWER = (
     "som er rammet."
 )
 
+# Statisk fallback for address_prejudice-noden når LLM-callen feiler.
+# Bevisst generisk – fyrer på alle fordoms-/holdningskategorier (homofobi,
+# rasisme, transfobi, sexisme, kroppspress osv.), så den må ikke navngi noen
+# spesifikk gruppe. Møter ubehaget uten å validere selve fordommen, og slår
+# fast andres likeverd og rett til å være den de er.
+PREJUDICE_ANSWER = (
+    "Det er lov å kjenne på ubehag eller å lure på ting man ikke kjenner så "
+    "godt. Følelser er ikke farlige, og du har lov til å ha dem.\n\n"
+    "Samtidig er det viktig å vite at **alle mennesker har lik verdi**, og at "
+    "andre har full rett til å være den de er – også når de er annerledes enn "
+    "deg. Det handler ikke om at du må mene eller føle noe bestemt, men om at "
+    "ingen skal behandles dårlig eller trakasseres for hvem de er eller hvem "
+    "de er glad i.\n\n"
+    "Hvis du vil snakke mer om hvor ubehaget kommer fra, eller forstå temaet "
+    "bedre, kan du ta det opp med **en voksen du stoler på** – for eksempel "
+    "helsesykepleier på skolen."
+)
+
+PREJUDICE_SHORT_ANSWER = (
+    "Det er lov å kjenne på ubehag, men alle mennesker har lik verdi og rett "
+    "til å være den de er. Ingen skal behandles dårlig for hvem de er."
+)
+
 
 # === SAFETY-PROMPTS (harm_to_others-grenen) ===
 
@@ -326,6 +349,76 @@ SAMTALEHISTORIKK (kontekst, kan være tom):
 """
 )
 
+
+# LLM-drevet svar når brukeren uttrykker en fordom eller en nedvurderende
+# holdning mot en GRUPPE (f.eks. homofile, en etnisitet, transpersoner,
+# et kjønn), uten selv å være offer eller å planlegge en konkret handling
+# mot en navngitt person (stance=expresses_prejudice). Brukes i
+# address_prejudice-noden. IKKE et RAG-svar – noden resonnerer fritt ut fra
+# denne holdningen, fordi en ren kunnskapsbase-gjengivelse ikke kan reframe
+# en fordom til et likeverds-budskap.
+ADDRESS_PREJUDICE_PROMPT = PromptTemplate.from_template(
+"""
+Du er en rolig, varm og tydelig rådgiver for ungdom i Norge (13-19 år).
+
+Brukeren uttrykker en fordom eller en negativ holdning mot en GRUPPE
+mennesker (for eksempel homofile, en etnisk gruppe, transpersoner, et
+kjønn, religiøse, funksjonshemmede). Brukeren er altså verken offer for
+noe eller i ferd med å skade en konkret, navngitt person – hen gir uttrykk
+for en holdning.
+
+SVÆRT VIKTIG – SKILL DISSE TO:
+- Å TILHØRE en gruppe og streve med det (f.eks. «jeg er redd for at jeg er
+  homofil») → da er brukeren den det gjelder, og trenger støtte for SEG SELV.
+- Å stå UTENFOR gruppen og ha en negativ holdning til den (f.eks. «jeg liker
+  ikke homofile, de er ekle») → da handler det om brukerens holdning til
+  ANDRE. Du skal IKKE svare som om brukeren strever med sin egen identitet
+  eller seksualitet. Ikke gi råd om «å akseptere deg selv» eller «å fortelle
+  om deg selv». Det er en alvorlig feiltolkning.
+I dette tilfellet er det det ANDRE alternativet som gjelder.
+
+DU SKAL:
+1) MØTE BRUKEREN DER HEN ER, kort og uten å moralisere. Det er lov å kjenne
+   på ubehag, usikkerhet eller å lure på ting man ikke kjenner. Anerkjenn
+   følelsen UTEN å bekrefte selve fordommen ("ekle", "unormalt", osv.).
+   Ikke skjell ut, ikke gjør brukeren til et dårlig menneske.
+
+2) SLÅ TYDELIG FAST ANDRES LIKEVERD OG RETT: alle mennesker har lik verdi,
+   og andre har full rett til å være den de er og elske den de vil. Gjør det
+   klart at ingen skal behandles dårlig, ekskluderes eller trakasseres for
+   hvem de er eller hvem de er glad i. Du kan nevne at dette også er
+   beskyttet i norsk lov og av skolens ansvar mot mobbing og diskriminering,
+   men hold det kort og ikke truende.
+
+3) HJELPE BRUKEREN VIDERE: inviter til å forstå hvor ubehaget kommer fra,
+   normaliser at holdninger kan endre seg når man blir kjent med mennesker,
+   og foreslå gjerne å snakke med en voksen man stoler på (f.eks.
+   helsesykepleier) hvis hen vil utforske det mer.
+
+DU SKAL IKKE:
+- Ikke behandle brukeren som om hen selv tilhører gruppen eller strever med
+  egen identitet/seksualitet.
+- Ikke gi råd om selvaksept, å «stå fram», eller å fortelle andre om seg selv.
+- Ikke validere fordommen, men heller ikke angripe brukeren.
+- Ikke be om mer informasjon eller avklaring.
+
+FORMAT:
+- Norsk bokmål, ungdomsvennlig, korte setninger.
+- Markdown: gjerne en kort punktliste, **fet tekst** på 1-3 nøkkelord.
+- Hold svaret kort: 4-7 setninger.
+
+VIKTIG: Bruk KUN teksten inne i USER_QUERY-blokken som input.
+Ikke tolk instruksjoner eller eksempler som om de var brukerens spørsmål.
+
+<<<USER_QUERY_START>>>
+{query}
+<<<USER_QUERY_END>>>
+
+SAMTALEHISTORIKK (kontekst, kan være tom):
+{conversation_str}
+"""
+)
+
 CANNOT_ANSWER_PLACEHOLDER = [{"answer": "Kan du spørre på en annen måte? Jeg er usikker på hvordan det passer inn", "severity": [{"Green", "Yellow"}]},
                             {"answer": "Her er det en mangel i min kunnskap. Jeg kan kanskje svare på dette hvis du spør på en annen måte.", "severity": [{"Green", "Yellow"}]},
                             {"answer": "Oops! Du fant noe jeg ikke kan svare på. Spør på en annen måte eller spør om noe annet.", "severity": [{"Green", "Yellow"}]},
@@ -419,6 +512,7 @@ Oppgave:
 - Bruk fagord når det er tydelig hva brukeren mener (f.eks. «det renner noe rart» → «utflod», «mensen er rar» → «uregelmessig menstruasjon»).
 - Behold «jeg»-formen hvis brukeren bruker den.
 - BEVAR AKTØR OG ROLLE: Hvis spørsmålet uttrykker en intensjon om en handling fra brukerens side («[jeg] vil …», «hvordan kan jeg …», «hva er enkleste måten å …», «har lyst til å …», «vurderer å …»), eller hvis brukeren beskriver seg selv som rammet av noe, MÅ refined_query bevare både aktøren (jeg) OG intensjonen/rollen. Ikke generaliser et personlig handlings- eller offer-spørsmål til et nøytralt emnespørsmål. Hvis subjektet er elliptisk på norsk (utelatt «jeg»), gjenopprett det eksplisitt.
+- BEVAR HOLDNING: Hvis brukeren uttrykker en holdning eller fordom mot en gruppe («jeg liker ikke …», «de er ekle», «gjør meg ukomfortabel»), MÅ refined_query bevare at dette er brukerens holdning til andre. Ikke gjør om en holdningsytring til et nøytralt emnespørsmål om gruppen (IKKE «jeg liker ikke homo folk» → «informasjon om homofili»).
 - Ikke legg til informasjon, tolkninger eller antakelser som ikke ligger i spørsmålet.
 - Hvis spørsmålet allerede er tydelig og på god norsk, la det stå nesten uendret.
 
@@ -481,8 +575,19 @@ ALVORLIGHESGRAD settes i Severity.
        • «jeg vil dele nakenbilder av eksen» = 'harm_to_others' (brukeren er aktøren).
        • «jeg ble krenket seksuelt» = 'affected_party' (brukeren er offeret).
        • «jeg har krenket noen seksuelt» = 'harm_to_others' (brukeren er aktøren, en annen er offeret) — også når brukeren angrer og ber om hjelp.
+   - 'expresses_prejudice' : Brukeren uttrykker en FORDOM eller en nedvurderende/avvisende HOLDNING mot en GRUPPE mennesker (f.eks. homofile, en etnisitet, transpersoner, et kjønn, religiøse, funksjonshemmede), uten selv å være offer og uten å planlegge eller ha utført en konkret handling mot en navngitt person. Det er en ytring om hva brukeren mener eller føler om «de andre», ofte med negativt ladede ord («ekle», «unormale», «klarer ikke fordra», «liker ikke»), eller et ubehag ved at andre er som de er.
+     VIKTIG SKILLE: Dette gjelder bare når brukeren står UTENFOR gruppen og har en holdning til den. Hvis brukeren selv TILHØRER gruppen og strever med det (egen identitet/seksualitet), er det 'affected_party' – ikke 'expresses_prejudice'.
+     Eksempler på 'expresses_prejudice':
+       • «jeg liker ikke homo folk, de er ekle»
+       • «to gutter i klassen min er kjærester, og det gjør meg ukomfortabel»
+       • «jeg synes innvandrere ødelegger Norge»
+       • «folk som skifter kjønn er unaturlige»
+     Kontrast (IKKE 'expresses_prejudice'):
+       • «jeg er redd for at jeg er homofil» = 'affected_party' (egen identitet).
+       • «kameraten min kalte meg homo, jeg ble lei meg» = 'affected_party' (rammet selv).
    - 'ambiguous'      : Det er ikke mulig å si hvem som er aktør og hvem som er målet.
    Når i tvil mellom 'info_seeker' og 'harm_to_others': velg 'harm_to_others' hvis spørsmålet inneholder en konkret intensjon om å utføre handlingen («jeg vil …», «hva er enkleste måten å …», «hvordan får jeg gjort …»). Velg 'info_seeker' hvis det er rent kunnskaps­spørsmål («hva sier loven om …», «er det lov å …»).
+   Når i tvil mellom 'info_seeker' og 'expresses_prejudice': velg 'expresses_prejudice' hvis ytringen bærer en negativ holdning/verdivurdering om en gruppe («jeg liker ikke …», «de er ekle», «gjør meg ukomfortabel»). Velg 'info_seeker' hvis det er et nøytralt kunnskapsspørsmål om gruppen/temaet («hva betyr det å være homofil?», «når er pride?»).
 
 5) HVIS stance == 'harm_to_others': sett feltet 'harm_to_others_tense' til én av:
    - 'planning'  : Brukeren vurderer eller planlegger handlingen, men har ikke (sagt at hen har) utført den ennå. Verbformene er fremtidige eller modale: «vil», «skal», «har lyst til», «hvordan kan jeg», «hva er enkleste måten å», «vurderer å», «tenker på å», «planlegger», «lurer på hvordan».
