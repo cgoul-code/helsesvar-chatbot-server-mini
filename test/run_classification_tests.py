@@ -483,6 +483,30 @@ def verdict_reason(
     return " | ".join(reasons)
 
 
+def _write_excel_with_fallback(path: str, write_fn, max_tries: int = 20) -> str:
+    """Call ``write_fn(target_path)``; if the file is locked (open in Excel),
+    retry with ``_2``, ``_3``, … suffixes so a locked file never aborts the run.
+
+    Returns the path actually written. Raises if every candidate is locked.
+    """
+    base, ext = os.path.splitext(path)
+    for i in range(1, max_tries + 1):
+        candidate = path if i == 1 else f"{base}_{i}{ext}"
+        try:
+            write_fn(candidate)
+            if candidate != path:
+                print(
+                    f"  '{os.path.basename(path)}' was locked (open in Excel?) — "
+                    f"wrote '{os.path.basename(candidate)}' instead."
+                )
+            return candidate
+        except PermissionError:
+            continue
+    raise PermissionError(
+        f"Could not write {path}: it and {max_tries - 1} fallback names are all locked."
+    )
+
+
 async def run_fixture(
     path: str,
     vector_index: str,
@@ -625,10 +649,14 @@ async def run_fixture(
         ],
     )
     df = _strip_illegal_excel_chars(df)
-    with pd.ExcelWriter(out_xlsx, engine="openpyxl") as writer:
-        df.to_excel(writer, index=False, sheet_name="results")
-        _style_sheet(writer.sheets["results"], df.columns.tolist())
-    print(f"Wrote {len(df)} rows to {out_xlsx}")
+
+    def _write(target: str) -> None:
+        with pd.ExcelWriter(target, engine="openpyxl") as writer:
+            df.to_excel(writer, index=False, sheet_name="results")
+            _style_sheet(writer.sheets["results"], df.columns.tolist())
+
+    written = _write_excel_with_fallback(out_xlsx, _write)
+    print(f"Wrote {len(df)} rows to {written}")
 
     return {
         "fixture": name,
@@ -747,15 +775,29 @@ def _write_summary(results: List[Dict[str, Any]]) -> None:
     """
     run_date = datetime.now(ZoneInfo("Europe/Oslo")).strftime("%Y-%m-%d %H:%M:%S")
 
-    xlsx_files = sorted(
+    candidates = [
         p for p in glob.glob(os.path.join(RESULTS_DIR, "*.xlsx"))
-        if os.path.abspath(p) != os.path.abspath(SUMMARY_XLSX)
-        and not os.path.basename(p).startswith("~$")  # skip Excel lock files
-    )
+        if not os.path.basename(p).startswith("~$")          # Excel lock files
+        and not os.path.basename(p).startswith("summary")     # summary + summary_N fallbacks
+    ]
+
+    # A locked file forces a "_2"/"_3" fallback copy, so the same fixture may
+    # have several .xlsx on disk. Collapse them to one row per fixture using the
+    # freshest (newest-mtime) file, so TOTAL never double-counts. The "_N" suffix
+    # is safe to strip because real fixtures all end in "_questions".
+    newest_per_fixture: Dict[str, str] = {}
+    for p in candidates:
+        stem = os.path.splitext(os.path.basename(p))[0]
+        canonical = re.sub(r"_\d+$", "", stem)
+        cur = newest_per_fixture.get(canonical)
+        if cur is None or os.path.getmtime(p) > os.path.getmtime(cur):
+            newest_per_fixture[canonical] = p
+
     rows: List[Dict[str, Any]] = []
-    for p in xlsx_files:
-        row = _summary_row_from_excel(p)
+    for canonical in sorted(newest_per_fixture):
+        row = _summary_row_from_excel(newest_per_fixture[canonical])
         if row is not None:
+            row["fixture"] = canonical + ".json"  # normalize away any "_N" suffix
             rows.append(row)
 
     totals = {
@@ -789,8 +831,10 @@ def _write_summary(results: List[Dict[str, Any]]) -> None:
     )
     df["summary_written"] = run_date
     os.makedirs(RESULTS_DIR, exist_ok=True)
-    df.to_excel(SUMMARY_XLSX, index=False)
-    print(f"Wrote summary ({len(rows) - 1} fixtures) to {SUMMARY_XLSX}")
+    written = _write_excel_with_fallback(
+        SUMMARY_XLSX, lambda target: df.to_excel(target, index=False)
+    )
+    print(f"Wrote summary ({len(rows) - 1} fixtures) to {written}")
 
 
 def main() -> None:

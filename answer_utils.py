@@ -417,8 +417,10 @@ async def get_answer_as_stream(
       raise
 
   except asyncio.CancelledError:
-      # Viktig: må ikke svelges i async streaming
-      logging.info("Streaming cancelled by client")
+      # Viktig: må ikke svelges i async streaming.
+      # The route layer logs the authoritative completed-vs-cutoff message;
+      # keep this at debug to avoid duplicate noise.
+      logging.debug("get_answer_as_stream cancelled (consumer disconnected)")
       raise
 
   except Exception as e:
@@ -516,8 +518,9 @@ async def get_related_qa_as_stream(
     raise
 
   except asyncio.CancelledError:
-    # Viktig: må ikke svelges i async streaming
-    logging.info("Streaming cancelled by client")
+    # Viktig: må ikke svelges i async streaming.
+    # The route layer logs the authoritative completed-vs-cutoff message.
+    logging.debug("get_related_qa_as_stream cancelled (consumer disconnected)")
     raise
 
   except Exception as e:

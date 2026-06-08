@@ -345,6 +345,9 @@ def register_routes(app):
 
             async def stream_examples():
                 yield _format_sse(json.dumps({"event": "open", "message": "ok"}, ensure_ascii=False))
+                chunks_sent = 0
+                agent_completed = False
+                client_disconnected = False
                 try:
                     async for kind, item in _with_heartbeat(
                         agent_fn(query_settings, server_settings, vector_store)
@@ -353,16 +356,25 @@ def register_routes(app):
                             yield SSE_HEARTBEAT
                             continue
                         data = json.dumps(item, ensure_ascii=False) if isinstance(item, dict) else str(item)
+                        chunks_sent += 1
                         yield _format_sse(data)
 
+                    agent_completed = True
+
                 except (asyncio.CancelledError, GeneratorExit):
-                    return
+                    client_disconnected = True
+                    if agent_completed:
+                        logging.debug("Client closed /examples connection after completion (chunks=%d)", chunks_sent)
+                    else:
+                        logging.warning("Client disconnected mid-stream on /examples after %d chunks", chunks_sent)
+                    raise
                 except Exception as e:
                     logging.error("Error while streaming examples output", exc_info=True)
                     yield _format_sse(json.dumps({"event": "error", "error": str(e)}, ensure_ascii=False))
                 finally:
-                    # make sure done always comes
-                    yield _format_sse(json.dumps({"event": "done"}, ensure_ascii=False))
+                    # make sure done always comes (unless the client is already gone)
+                    if not client_disconnected:
+                        yield _format_sse(json.dumps({"event": "done"}, ensure_ascii=False))
 
             headers = {
                 "Content-Type": "text/event-stream; charset=utf-8",
@@ -422,6 +434,9 @@ def register_routes(app):
                 yield _format_sse(json.dumps({"event": "open", "message": "ok", "session_id": session_id}, ensure_ascii=False))
 
                 assistant_buffer: List[str] = []
+                chunks_sent = 0
+                agent_completed = False
+                client_disconnected = False
 
                 try:
                     async for kind, item in _with_heartbeat(
@@ -445,22 +460,45 @@ def register_routes(app):
                         else:
                             data = str(chunk)
 
+                        chunks_sent += 1
                         yield _format_sse(data)
 
+                    # Agent generator finished producing all output normally.
+                    agent_completed = True
+
                 except (asyncio.CancelledError, GeneratorExit):
-                    return
+                    client_disconnected = True
+                    if agent_completed:
+                        # Connection dropped after the answer was fully produced —
+                        # benign tail-end close (e.g. client released the reader).
+                        logging.debug(
+                            "Client closed connection after stream completed (session=%s, chunks=%d)",
+                            session_id, chunks_sent,
+                        )
+                    else:
+                        # Connection dropped while the agent was still producing —
+                        # the answer was genuinely cut off (proxy timeout, app
+                        # backgrounded, network switch, navigation, etc.).
+                        logging.warning(
+                            "Client disconnected mid-stream: answer cut off after %d chunks (session=%s)",
+                            chunks_sent, session_id,
+                        )
+                    raise
                 except Exception as e:
                     logging.error("Error while streaming agent output", exc_info=True)
                     yield _format_sse(json.dumps({"event": "error", "error": str(e)}, ensure_ascii=False))
                 finally:
-                    # 5) store assistant full answer ONCE
+                    # 5) store assistant full answer ONCE (even on a partial/cut-off stream)
                     full_answer = "".join(assistant_buffer).strip()
                     if session_id:
                         # hent siste historikk igjen i tilfelle andre forespørsler har skrevet
                         final_history = _load_history(session_id)
                         _store_assistant_message(session_id, final_history, full_answer)
 
-                    yield _format_sse(json.dumps({"event": "done"}, ensure_ascii=False))
+                    # Can't (and needn't) emit a final frame once the client is gone —
+                    # yielding during GeneratorExit raises, and the socket is closed.
+                    if not client_disconnected:
+                        yield _format_sse(json.dumps({"event": "done"}, ensure_ascii=False))
 
             headers = {
                 "Content-Type": "text/event-stream; charset=utf-8",
