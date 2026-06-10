@@ -365,6 +365,7 @@ async def get_answer_as_stream(
     
     init_state: State_Answer = {
         "llm": server_settings.llm,
+        "fast_llm": getattr(server_settings, "fast_llm", None) or server_settings.llm,
         "index" : index,
         "query_engine": query_engine,
         "retriever": retriever,

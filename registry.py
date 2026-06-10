@@ -528,6 +528,8 @@ Eksempler:
 2) Vurder om spørsmålet bør deles opp i flere delspørsmål for å gi et godt svar.
 - Sett needs_subqueries = True KUN hvis spørsmålet inneholder 3+ helt separate temaer.
 - For de fleste spørsmål er False riktig.
+- HVIS needs_subqueries = True: fyll feltet 'subqueries' med de separate delspørsmålene, omskrevet tydelig på norsk bokmål (samme regler som i punkt 1). Bevar «jeg»-formen. Ikke svar på dem. Returner kun én versjon av hvert delspørsmål. Sett også 'main_category' til et kort emne-stikkord for spørsmålet.
+- HVIS needs_subqueries = False: la 'subqueries' være en tom liste og 'main_category' tom.
 
 3) Kategoriser alvorlighetsgraden av spørsmålet i én av tre kategorier: "Green", "Yellow", eller "Red".
 

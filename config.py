@@ -10,7 +10,7 @@ import asyncio
 
 from dotenv import load_dotenv, find_dotenv
 
-from llm_provider import build_chat_llm
+from llm_provider import build_chat_llm, build_fast_chat_llm
 from embeddings_provider import configure_embeddings
 
 load_dotenv(find_dotenv(), override=True)
@@ -37,6 +37,7 @@ class ServerSettings:
         self.indexes_loaded = False
         self.status = "Server is not ready"
         self.llm = None
+        self.fast_llm = None
 
     def update_status(self, status):
         self.status = status
@@ -45,6 +46,9 @@ class ServerSettings:
 
     def set_llm(self, llm):
         self.llm = llm
+
+    def set_fast_llm(self, llm):
+        self.fast_llm = llm
 
     def get_status(self):
         return self.status, self.indexes_loaded
@@ -103,6 +107,7 @@ VECTOR_INDEX_MAP = [
 
 
 server_settings.set_llm(build_chat_llm())
+server_settings.set_fast_llm(build_fast_chat_llm())
 
 
 

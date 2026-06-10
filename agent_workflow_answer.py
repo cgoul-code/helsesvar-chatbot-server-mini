@@ -136,7 +136,10 @@ class RelatedSelection(BaseModel):
 class State_Answer(TypedDict):
     ''' config params'''
     llm: Any
-    
+    # Cheaper/faster model for auxiliary calls (analyze, orchestrate,
+    # entailment, related-query selection). Falls back to `llm`.
+    fast_llm: Any
+
     index: VectorStoreIndex
     query_engine: BaseQueryEngine # Text-bank
     retriever: BaseRetriever
@@ -190,6 +193,10 @@ class State_Answer(TypedDict):
     # When True, query_grounded runs an LLM entailment gate that downgrades
     # claims whose (real) quote doesn't support them. Default True.
     entailment_check: bool
+
+    # True once the final answer has been streamed token-by-token to the
+    # client, so emit_query_answer_references doesn't re-emit it.
+    answer_streamed: bool
 
     ''' debug '''
     debug_emit_nodes: bool  # emit exact retrieved nodes as `retrieved_nodes`
@@ -254,6 +261,17 @@ class QueryPlan(BaseModel):
             "stance ikke er 'harm_to_others'."
         ),
     )
+    main_category: str = Field(
+        default="",
+        description="Kort emne-stikkord. Fylles kun når needs_subqueries=True.",
+    )
+    subqueries: List[str] = Field(
+        default_factory=list,
+        description=(
+            "Delspørsmål når needs_subqueries=True (ellers tom liste). Hvert "
+            "element er ett omskrevet delspørsmål på norsk bokmål."
+        ),
+    )
 
 class WorkerState(TypedDict):
     subquery: SubQuery
@@ -261,6 +279,7 @@ class WorkerState(TypedDict):
     query_engine: BaseQueryEngine
     retriever: BaseRetriever
     llm: Any
+    fast_llm: Any
     conversation_str: str
     query_severity: str
     claims_valid_threshold: float
@@ -302,6 +321,42 @@ def _invoke_with_usage(llm, messages) -> tuple[Any, int, int]:
     result = llm.invoke(messages, config={"callbacks": [callback]})
     in_tok, out_tok = _extract_usage_tokens(callback.usage_metadata)
     return result, in_tok, out_tok
+
+def _chunk_text(chunk: Any) -> str:
+    """Pull plain text out of a streamed message chunk.
+
+    Azure/OpenAI chunks expose `.content` as a str; Anthropic can return a
+    list of content blocks. Normalise both to a string.
+    """
+    content = getattr(chunk, "content", "") or ""
+    if isinstance(content, list):
+        parts = []
+        for p in content:
+            if isinstance(p, dict):
+                parts.append(p.get("text", "") or "")
+            else:
+                parts.append(str(p))
+        return "".join(parts)
+    return content
+
+
+def _stream_with_usage(llm, messages, event: str = "answer") -> tuple[str, int, int]:
+    """Stream an LLM response, emitting each piece as it arrives, and return
+    (full_text, input_tokens, output_tokens).
+
+    This is what makes the answer appear token-by-token in the client instead
+    of all at once after the whole graph has finished.
+    """
+    callback = UsageMetadataCallbackHandler()
+    parts: List[str] = []
+    for chunk in llm.stream(messages, config={"callbacks": [callback]}):
+        piece = _chunk_text(chunk)
+        if piece:
+            parts.append(piece)
+            _emit(piece, event=event)
+    in_tok, out_tok = _extract_usage_tokens(callback.usage_metadata)
+    return "".join(parts), in_tok, out_tok
+
 
 def _make_dialog_plan(llm, history_txt: str) -> DialogPlan:
     prompt = (
@@ -757,12 +812,26 @@ def _classify_relevancy(score: float, thresholds: Dict[str, float]) -> str:
 # ---------------------------------------------------------
 # Noder i grafen
 # ---------------------------------------------------------
+def _make_subquery(text: str) -> SubQuery:
+    """Wrap a plain subquery string in an (unanswered) SubQuery for the workers."""
+    return SubQuery(
+        subquery=text,
+        answer="",
+        short_answer="",
+        references=[],
+        response_validity="not valid",
+        response_validity_index=0.0,
+    )
+
+
 def analyze_query(state: State_Answer) -> Dict[str, Any]:
-    """Renskriver spørsmålet og avgjør om vi trenger subqueries."""
+    """Renskriver spørsmålet, klassifiserer, OG (ved behov) dekomponerer i
+    delspørsmål — alt i ett LLM-kall. Erstatter det tidligere separate
+    orchestrator-kallet."""
 
     _emit("Analyze and possibly rewrite user query", event="info")
 
-    llm = state["llm"]
+    llm = state.get("fast_llm") or state["llm"]
 
     conversation_str = state.get("conversation_str", "")
     original_q = state["query"]
@@ -778,21 +847,34 @@ def analyze_query(state: State_Answer) -> Dict[str, Any]:
 
     # Vi skriver om query i state til renskrevet versjon
     print(f'Severity: {plan.query_severity}, Stance: {plan.stance}, Needs subqueries: {plan.needs_subqueries}, Harm tense: {plan.harm_to_others_tense}')
+
+    # Bygg SubQuery-objekter fra delspørsmålene den samme callen produserte,
+    # så vi slipper et eget orchestrator-kall (sparer ett round-trip).
+    subqueries = [
+        _make_subquery(text)
+        for text in (plan.subqueries or [])
+        if (text or "").strip()
+    ]
+
     return {
         "refined_query": plan.refined_query,
         "needs_subqueries": plan.needs_subqueries,
         "query_severity": plan.query_severity,
         "stance": plan.stance,
         "harm_to_others_tense": plan.harm_to_others_tense,
+        "main_category": plan.main_category or "",
+        "subqueries": subqueries,
     }
     
 def orchestrator(state: State_Answer) -> Dict[str, Any]:
-    """Planlegger – genererer delspørsmål basert på brukerens spørsmål."""
+    """DEPRECATED / ubrukt: delspørsmål genereres nå i analyze_query (samme
+    LLM-kall), og route_after_analysis fan-er ut workerne direkte. Beholdt
+    midlertidig for referanse; ikke koblet inn i grafen lenger."""
     
     _emit("Orchestrator that generates a plan for solving the question", event="info")
 
     try:
-        llm = state["llm"]
+        llm = state.get("fast_llm") or state["llm"]
         prompt = subqueries_prompt(query=state["refined_query"])
 
         planner = llm.with_structured_output(SubQueries)
@@ -834,6 +916,7 @@ def fast_single(state: State_Answer) -> Dict[str, Any]:
         "query_engine": state["query_engine"],
         "retriever": state["retriever"],
         "llm": state["llm"],
+        "fast_llm": state.get("fast_llm") or state["llm"],
         "conversation_str": state.get("conversation_str", ""),
         "query_severity": state.get("query_severity", "Green"),
         "claims_valid_threshold": state.get("claims_valid_threshold", 1.0),
@@ -879,14 +962,18 @@ def fast_single(state: State_Answer) -> Dict[str, Any]:
         "validate_response_result": validate_response_result,
     }
     
-def route_after_analysis(state: State_Answer) -> str:
-    """Bestem neste node basert på stance, tense og needs_subqueries.
+def route_after_analysis(state: State_Answer):
+    """Bestem neste steg basert på stance, tense og needs_subqueries.
 
     Stance dominerer. For 'harm_to_others' deler vi i to grener basert på
     tense: 'completed' går til help_after_harm (skadebegrensning, ikke
     avvisning), alt annet går til refuse_harm_to_others. Dette unngår at
     kunnskapsbasen (som er skrevet for ofre/generell info) blir brukt til
     å besvare et gjerningsperson-spørsmål.
+
+    Multistegs-ruten fan-er nå ut workere DIREKTE (returnerer Send-liste),
+    siden delspørsmålene allerede er produsert i analyze_query. Det sparer
+    det tidligere separate orchestrator-kallet.
     """
     if state.get("stance") == "harm_to_others":
         tense = state.get("harm_to_others_tense", "unclear")
@@ -895,8 +982,8 @@ def route_after_analysis(state: State_Answer) -> str:
         return "refuse_harm_to_others"
     if state.get("stance") == "expresses_prejudice":
         return "address_prejudice"
-    if state.get("needs_subqueries"):
-        return "orchestrator"
+    if state.get("needs_subqueries") and (state.get("subqueries") or []):
+        return assign_workers(state)  # List[Send] → query_grounded
     return "fast_single"
 
 
@@ -1430,7 +1517,9 @@ def query_grounded(state: WorkerState) -> Dict[str, Any]:
         # and only when the cheap term-overlap pre-filter flags something.
         ent_in = ent_out = 0
         if state.get("entailment_check", True):
-            ent_in, ent_out = _apply_entailment_gate(claims_report, state["llm"])
+            ent_in, ent_out = _apply_entailment_gate(
+                claims_report, state.get("fast_llm") or state["llm"]
+            )
 
         answer_wrapped = _wrap_at_nearest_space(ga.answer, width=120)
 
@@ -1566,101 +1655,143 @@ def query_grounded(state: WorkerState) -> Dict[str, Any]:
 
 
 
-def synthesizer(state: State_Answer) -> Dict[str, Any]:
-    """Sette sammen endelig svar basert på del-svarene."""
-    
-    _emit( "Synthesize full answer", event="info")
+# System-instruks for trofast sammenstilling av del-svar (nøytral tone).
+# Brukes når stilen er 'factual', men det finnes flere del-svar som må slås
+# sammen. For warm/supportive/crisis brukes de finjusterte stil-promptene i
+# registry i stedet (de slår sammen og setter tone i samme omskrivning).
+_SYNTH_FAITHFUL_SYSTEM = (
+    "Du er en vennlig, empatisk og kunnskapsrik helseveileder laget for å hjelpe ungdom i Norge (alder 13–19 år).\n\n"
+    "Din oppgave er å sette sammen et enkelt, helhetlig og sammenhengende svar på norsk (bokmål) "
+    "**kun basert på den gitte listen med del-svar**.\n"
+    "Du skal **ikke finne på eller legge til ny informasjon, påstander, forklaringer "
+    "eller råd** som ikke uttrykkelig finnes i den gitte teksten.\n"
+    "Hvis noe mangler, er uklart eller motsier seg selv, skal du bare utelate det.\n\n"
+    "Målet ditt:\n"
+    "- Slå sammen overlappende eller gjentatte poenger fra de gitte del-svarene til et ryddig og lettlest sammendrag.\n"
+    "- Behold innhold og tone slik de er skrevet.\n"
+    "- Ikke legg til nye påstander, tolkninger eller veiledning.\n\n"
+    "Tone og stil:\n"
+    "- Rolig, vennlig og støttende tone. Du kan formulere overganger naturlig.\n"
+    "- Vis gjerne at du forstår at temaet kan være vanskelig, uten å legge til ny informasjon.\n"
+    "- Klart språk, korte setninger, ungdomsvennlig.\n"
+    "- Unngå faguttrykk hvis de ikke allerede står i teksten.\n\n"
+    "Formatering:\n"
+    "- Bruk korte overskrifter når det hjelper på lesbarheten.\n"
+    "- Ikke referer eksplisitt til kilder eller 'del-svar'.\n"
+    "- Ikke fyll på med fraser som 'Her er...' eller 'Nedenfor finner du...'.\n\n"
+    "Hvis del-svarene ikke inneholder brukbar informasjon, skal du svare:\n"
+    "\"Det vet jeg ikke basert på kildene.\""
+)
 
+
+def synthesize_style_stream(state: State_Answer) -> Dict[str, Any]:
+    """Slå sammen gyldige del-svar OG bruk riktig tone i ÉN streamet LLM-call.
+
+    Erstatter de tidligere to nodene `synthesizer` + `apply_response_style`.
+    Svaret streames token-for-token til klienten (event="answer") mens det
+    genereres, slik at brukeren ser tekst med en gang i stedet for å vente på
+    at hele grafen blir ferdig.
+    """
     llm = state["llm"]
 
-    try:
-        sq: List[SubQuery] = state.get("completed_subqueries", []) or []
+    sq: List[SubQuery] = state.get("completed_subqueries", []) or []
+    valid = [s for s in sq if s.response_validity == "valid"]
 
-        completed_report_answers = ""
-        completed_report_answers_non_valid = ""
+    # Referanser + kort svar fra de gyldige del-svarene.
+    ref_list: List[Reference] = []
+    final_short = ""
+    for s in valid:
+        if s.references:
+            ref_list.extend(s.references)
+        if not final_short and s.short_answer:
+            final_short = s.short_answer
+    top5 = _dedupe_references(ref_list, top_k=5)
 
-        for s in sq:
-            if s.response_validity == "valid":
-                combined = f"Subquery: {s.subquery}\n\nAnswer: {s.answer}\n\n"
-                completed_report_answers += combined
-            #else:
-                #completed_report_answers_non_valid += (
-                #    f'\n\nBeklager, men jeg kunne ikke svare på spørsmålet: "{s.subquery}"'
-                #)
-
-        if completed_report_answers:
-            logging.info("Aggregating these answers: %s", completed_report_answers)
-
-            messages = [
-                SystemMessage(content=(
-                    "Du er en vennlig, empatisk og kunnskapsrik helseveileder laget for å hjelpe ungdom i Norge (alder 13–19 år).\n\n"
-                    "Din oppgave er å sette sammen et enkelt, helhetlig og sammenhengende svar på norsk (bokmål) "
-                    "**kun basert på den gitte listen med del-svar**.\n"
-                    "Du skal **ikke finne på eller legge til ny informasjon, påstander, forklaringer "
-                    "eller råd** som ikke uttrykkelig finnes i den gitte teksten.\n"
-                    "Hvis noe mangler, er uklart eller motsier seg selv, skal du bare utelate det.\n\n"
-                    "Målet ditt:\n"
-                    "- Slå sammen overlappende eller gjentatte poenger fra de gitte del-svarene til et ryddig og lettlest sammendrag.\n"
-                    "- Behold innhold og tone slik de er skrevet.\n"
-                    "- Ikke legg til nye påstander, tolkninger eller veiledning.\n\n"
-                    "Tone og stil:\n"
-                    "- Rolig, vennlig og støttende tone. Du kan formulere overganger naturlig.\n"
-                    "- Vis gjerne at du forstår at temaet kan være vanskelig, uten å legge til ny informasjon.\n"
-                    "- Klart språk, korte setninger, ungdomsvennlig.\n"
-                    "- Unngå faguttrykk hvis de ikke allerede står i teksten.\n\n"
-                    "Formatering:\n"
-                    "- Bruk korte overskrifter når det hjelper på lesbarheten.\n"
-                    "- Ikke referer eksplisitt til kilder eller 'del-svar'.\n"
-                    "- Ikke fyll på med fraser som 'Her er...' eller 'Nedenfor finner du...'.\n\n"
-                    "Hvis del-svarene ikke inneholder brukbar informasjon, skal du svare:\n"
-                    "\"Det vet jeg ikke basert på kildene.\""
-                )),
-                HumanMessage(
-                    content=f"Here is the list of answers: {completed_report_answers}"
-                ),
-            ]
-
-            aggregated_answer, in_tokens, out_tokens = _invoke_with_usage(llm, messages)
-
-            ref_list: List[Reference] = []
-            for s in sq:
-                if s.references and s.response_validity == "valid":
-                    ref_list.extend(s.references)
-
-            top5 = _dedupe_references(ref_list, top_k=5)
-
-            final_short = ""
-            for s in sq:
-                if s.response_validity == "valid" and s.short_answer:
-                    final_short = s.short_answer
-                    break
-
-            return {
-                "validate_response_result": "Accepted",
-                "final_answer": aggregated_answer.content + completed_report_answers_non_valid,
-                "final_short_answer": final_short,
-                "references": top5,
-                "input_tokens": in_tokens,     
-                "output_tokens": out_tokens,   
-            }
-
-        # Ingen gyldige del-svar
+    # Ingen gyldige del-svar → placeholder. emit-noden skriver den ut.
+    if not valid:
         placeholder = _pick_cannot_answer_placeholder(state.get("query_severity", "Green"))
+        _emit("Ingen gyldige del-svar – returnerer placeholder", event="info")
         return {
-            "validate_response_result":"Rejected",
+            "validate_response_result": "Rejected",
             "final_answer": placeholder,
-            "final_short_answer": placeholder, 
+            "final_short_answer": placeholder,
             "references": [],
+            "answer_streamed": False,
         }
 
-    except Exception as e:
-        logging.error("Failed to execute synthesizer: %s", e)
+    # Kildetekst = de gyldige svarene (uten Subquery-stillas; stil-promptene
+    # forventer ren svartekst).
+    source_answer = "\n\n".join(s.answer for s in valid if s.answer).strip()
+
+    # Velg stil: klient-override > auto-routing, med Red-safety-floor.
+    override = (state.get("response_style") or "").strip()
+    if override in RESPONSE_STYLES:
+        style, source_kind = override, "override"
+    else:
+        style = pick_response_style(state.get("query_severity", ""), state.get("stance", ""))
+        source_kind = "auto"
+    if state.get("query_severity") == "Red" and style != "crisis":
+        style, source_kind = "crisis", "forced_red"
+
+    _emit(f"Synthesize + style ({style}, source={source_kind}) — streaming", event="info")
+
+    # Rask vei: 'factual' med ett enkelt del-svar trenger verken sammenslåing
+    # eller omskrivning → stream råsvaret direkte uten LLM-call.
+    if style == "factual" and len(valid) == 1:
+        _emit(source_answer, event="answer")
+        _emit("\n", event="answer")
         return {
-            "final_answer": (
-                "Jeg beklager, men jeg klarte ikke å sette sammen et helhetlig svar nå."
-            ),
-            "references": [],
+            "validate_response_result": "Accepted",
+            "final_answer": source_answer,
+            "final_short_answer": final_short,
+            "references": top5,
+            "response_style": "factual",
+            "response_style_source": source_kind,
+            "answer_streamed": True,
         }
+
+    # Bygg ÉN melding som både slår sammen og setter tone.
+    prompt_template = _STYLE_TO_PROMPT.get(style)
+    if prompt_template is not None:
+        # Gjenbruk den finjusterte stil-prompten; mat den den sammenstilte
+        # kildeteksten så sammenslåing + tone skjer i samme omskrivning.
+        messages = prompt_template.format(answer=source_answer)
+    else:
+        # 'factual' med flere del-svar: trofast sammenstilling, nøytral tone.
+        messages = [
+            SystemMessage(content=_SYNTH_FAITHFUL_SYSTEM),
+            HumanMessage(content=f"Her er listen med del-svar:\n\n{source_answer}"),
+        ]
+
+    try:
+        full, in_tok, out_tok = _stream_with_usage(llm, messages, event="answer")
+        _emit("\n", event="answer")
+        return {
+            "validate_response_result": "Accepted",
+            "final_answer": full.strip() or source_answer,
+            "final_short_answer": final_short,
+            "references": top5,
+            "response_style": style,
+            "response_style_source": source_kind,
+            "answer_streamed": True,
+            "input_tokens": in_tok,
+            "output_tokens": out_tok,
+        }
+    except Exception as e:
+        # Fallback: stream råsvaret slik at brukeren får noe brukbart.
+        logging.error("synthesize_style_stream failed, streaming source answer: %s", e)
+        _emit(source_answer, event="answer")
+        _emit("\n", event="answer")
+        return {
+            "validate_response_result": "Accepted",
+            "final_answer": source_answer,
+            "final_short_answer": final_short,
+            "references": top5,
+            "response_style": style,
+            "response_style_source": source_kind,
+            "answer_streamed": True,
+        }
+
 
 def pick_response_style(severity: str, stance: str) -> str:
     """Auto-rute fra (severity, stance) til en av RESPONSE_STYLES.
@@ -1684,77 +1815,6 @@ def pick_response_style(severity: str, stance: str) -> str:
         return "warm"
     return "factual"
 
-
-def apply_response_style(state: State_Answer) -> Dict[str, Any]:
-    """Omskriv det endelige svaret i riktig stil.
-
-    Stilen bestemmes av (i) klient-override i state['response_style'],
-    eller (ii) auto-routing fra severity + stance via pick_response_style.
-    'factual' hopper over LLM-callen helt. 'warm'/'supportive'/'crisis'
-    bruker hver sin prompt fra registry.
-    """
-    # Bypass hvis svaret allerede er rejected (placeholder, ingen kilder)
-    if state.get("validate_response_result") == "Rejected":
-        _emit("Skipping style rewrite: response was Rejected", event="info")
-        return {}
-
-    answer = state.get("final_answer", "")
-    if not answer or len(answer) < 50:
-        return {}
-
-    # Resolve effective style: klient-override hvis gyldig, ellers auto.
-    override = (state.get("response_style") or "").strip()
-    if override in RESPONSE_STYLES:
-        style = override
-        source = "override"
-        _emit(f"Response style: {style} (client override)", event="info")
-    else:
-        style = pick_response_style(
-            state.get("query_severity", ""),
-            state.get("stance", ""),
-        )
-        source = "auto"
-        _emit(f"Response style: {style} (auto)", event="info")
-
-    # Safety floor: Red severity tvinger alltid 'crisis', også når klienten
-    # har overstyrt til noe annet. Et test-/eval-valg av f.eks. 'factual' på
-    # et Red-spørsmål ville gitt et tørt fakta-svar på en akutt krise – det
-    # er aldri riktig. Auto-routingen returnerer allerede 'crisis' på Red,
-    # så denne sjekken er bare relevant når en klient-override forsøker å
-    # gå rundt det.
-    if state.get("query_severity") == "Red" and style != "crisis":
-        _emit(
-            f"Response style: forced crisis (was {style}, severity=Red)",
-            event="info",
-        )
-        style = "crisis"
-        source = "forced_red"
-
-    # Factual = skip rewrite, behold svaret som det er.
-    if style == "factual":
-        return {"response_style": "factual", "response_style_source": source}
-
-    prompt_template = _STYLE_TO_PROMPT.get(style)
-    if prompt_template is None:
-        # Ukjent stil — burde ikke skje, men ikke krasj.
-        logging.warning("Unknown response style %r, skipping rewrite", style)
-        return {"response_style": style, "response_style_source": source}
-
-    try:
-        prompt_value = prompt_template.format(answer=answer)
-        rewritten, in_tokens, out_tokens = _invoke_with_usage(
-            state["llm"], prompt_value
-        )
-        return {
-            "final_answer": rewritten.content,
-            "response_style": style,
-            "response_style_source": source,
-            "input_tokens": in_tokens,
-            "output_tokens": out_tokens,
-        }
-    except Exception as e:
-        logging.error("apply_response_style (%s) failed: %s", style, e)
-        return {"response_style": style}  # behold originalt svar ved feil
 
 def emit_query_answer_references(state: State_Answer) -> Dict[str, Any]:
     """Emitter endelig svar + referanser som events."""
@@ -1799,10 +1859,15 @@ def emit_query_answer_references(state: State_Answer) -> Dict[str, Any]:
         answer = state.get("final_answer", "")
         short_answer = state.get("final_short_answer", "")
 
-        for line in answer.splitlines(True):
-            _emit(line, event = "answer")
-        _emit("\n", event = "answer")
-        
+        # The answer is normally streamed token-by-token in
+        # synthesize_style_stream. Only emit it here for paths that DON'T go
+        # through that node (harm/prejudice nodes, or a placeholder), i.e.
+        # when it hasn't already been streamed.
+        if not state.get("answer_streamed"):
+            for line in answer.splitlines(True):
+                _emit(line, event = "answer")
+            _emit("\n", event = "answer")
+
         for line in short_answer.splitlines(True):
             _emit(line, event = "short_answer")
         _emit("\n", event = "short_answer")
@@ -1872,6 +1937,7 @@ def assign_workers(state: State_Answer) -> List[Send]:
                 "query_engine": state["query_engine"],
                 "similarity_cutoff": state["similarity_cutoff"],
                 "llm": state["llm"],
+                "fast_llm": state.get("fast_llm") or state["llm"],
                 "retriever": state["retriever"],
                 "conversation_str": state.get("conversation_str", ""),
                 "query_severity": state.get("query_severity", "Green"),
@@ -2062,7 +2128,7 @@ def related_queries(state: State_Answer) -> dict:
 def related_queries_dialog_from_query(state: State_Answer) -> dict:
     _emit("Related queries: single LLM selection (history-aware)", event="info")
 
-    llm = state["llm"]
+    llm = state.get("fast_llm") or state["llm"]
     conversation_history = (state.get("conversation_history") or "").strip()
     last_q = (state.get("refined_query") or state.get("query") or "").strip()
 
@@ -2239,12 +2305,13 @@ builder = StateGraph(State_Answer)
 builder.add_node("analyze_query", analyze_query)
 builder.add_node("fast_single", fast_single)
 
-builder.add_node("orchestrator", orchestrator)
 builder.add_node("query_grounded", query_grounded)
-builder.add_node("synthesizer", synthesizer, join=True)
+# Slår sammen tidligere synthesizer + apply_response_style til én streamet
+# node. join=True (defer): kjøres sist, etter at alle query_grounded-workere
+# er ferdige, og fungerer også når fast_single er eneste forgjenger.
+builder.add_node("synthesize_style_stream", synthesize_style_stream, join=True)
 builder.add_node("emit_query_answer_references", emit_query_answer_references)
 builder.add_node("related_queries_dialog_from_query", related_queries_dialog_from_query)
-builder.add_node("apply_response_style", apply_response_style)
 builder.add_node("refuse_harm_to_others", refuse_harm_to_others)
 builder.add_node("help_after_harm", help_after_harm)
 builder.add_node("address_prejudice", address_prejudice)
@@ -2252,27 +2319,27 @@ builder.add_node("address_prejudice", address_prejudice)
 # Start → analyse
 builder.add_edge(START, "analyze_query")
 
-# Etter analyse: refusal, help-after-harm, fasttrack eller full multisteg-flyt
+# Etter analyse: refusal, help-after-harm, fasttrack eller multisteg-fan-out.
+# Multisteg fan-er ut workere direkte fra route_after_analysis (Send-liste),
+# så det trengs ingen egen orchestrator-node lenger.
 builder.add_conditional_edges(
     "analyze_query",
     route_after_analysis,
-    ["fast_single", "orchestrator", "refuse_harm_to_others", "help_after_harm", "address_prejudice"],
+    ["fast_single", "query_grounded", "refuse_harm_to_others", "help_after_harm", "address_prejudice"],
 )
 
-# Hvis multi: bruk eksisterende flyt
-builder.add_conditional_edges("orchestrator", assign_workers, ["query_grounded"])
-builder.add_edge("query_grounded", "synthesizer")
-builder.add_edge("synthesizer", "apply_response_style")
-builder.add_edge("apply_response_style", "emit_query_answer_references")
+# Hvis multi: workere → samle+stream → emit
+builder.add_edge("query_grounded", "synthesize_style_stream")
+builder.add_edge("synthesize_style_stream", "emit_query_answer_references")
 
-# Hvis fasttrack: gå rett til emitter
-builder.add_edge("fast_single", "apply_response_style")
-# (apply_response_style → emit_query_answer_references er allerede koblet)
+# Hvis fasttrack: samme samle+stream-node (ett gyldig del-svar)
+builder.add_edge("fast_single", "synthesize_style_stream")
 
-# Refusal og help-after-harm: skip retrieval og apply_response_style. Begge
+# Refusal og help-after-harm: skip retrieval og synthesize_style_stream. Begge
 # nodene produserer ferdig formulert tekst (LLM-drevet med statisk
 # fallback), og style-prompts er designet for å omskrive et grounded svar
-# – ikke et refusal/help-svar som allerede har riktig tone.
+# – ikke et refusal/help-svar som allerede har riktig tone. Disse emittes
+# (ikke-streamet) i emit_query_answer_references siden answer_streamed=False.
 builder.add_edge("refuse_harm_to_others", "emit_query_answer_references")
 builder.add_edge("help_after_harm", "emit_query_answer_references")
 builder.add_edge("address_prejudice", "emit_query_answer_references")
