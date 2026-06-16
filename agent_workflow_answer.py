@@ -164,6 +164,10 @@ class State_Answer(TypedDict):
     query_severity: Literal["Green", "Yellow", "Red", ""]
     stance: Literal["info_seeker", "affected_party", "harm_to_others", "expresses_prejudice", "ambiguous"]
     harm_to_others_tense: Literal["planning", "completed", "unclear", "na"]
+    # Brukerens eget kjønn, avledet i analyze_query. 'ukjent' = standard/ingen
+    # antakelse. Brukes til å vinkle svaret der kjønn er relevant (prevensjon,
+    # kropp, helse) uten å tilskrive brukeren feil kjønn.
+    asker_gender: Literal["jente", "gutt", "ukjent"]
     # Response-style. Tom streng = auto-rute via pick_response_style(). En
     # av RESPONSE_STYLES = klient-override som hopper over auto-routingen.
     response_style: str
@@ -265,6 +269,15 @@ class QueryPlan(BaseModel):
         default="",
         description="Kort emne-stikkord. Fylles kun når needs_subqueries=True.",
     )
+    asker_gender: Literal["jente", "gutt", "ukjent"] = Field(
+        default="ukjent",
+        description=(
+            "Brukerens EGET kjønn, avledet kun når det går tydelig fram av "
+            "brukerens egne ord. 'ukjent' er standard og skal brukes når "
+            "kjønnet ikke er eksplisitt — ikke gjett. Gjelder brukeren selv, "
+            "ikke andre personer som nevnes."
+        ),
+    )
     subqueries: List[str] = Field(
         default_factory=list,
         description=(
@@ -282,6 +295,7 @@ class WorkerState(TypedDict):
     fast_llm: Any
     conversation_str: str
     query_severity: str
+    asker_gender: str
     claims_valid_threshold: float
     entailment_check: bool
     debug_emit_nodes: bool
@@ -846,7 +860,7 @@ def analyze_query(state: State_Answer) -> Dict[str, Any]:
 
 
     # Vi skriver om query i state til renskrevet versjon
-    print(f'Severity: {plan.query_severity}, Stance: {plan.stance}, Needs subqueries: {plan.needs_subqueries}, Harm tense: {plan.harm_to_others_tense}')
+    print(f'Severity: {plan.query_severity}, Stance: {plan.stance}, Needs subqueries: {plan.needs_subqueries}, Harm tense: {plan.harm_to_others_tense}, Gender: {plan.asker_gender}')
 
     # Bygg SubQuery-objekter fra delspørsmålene den samme callen produserte,
     # så vi slipper et eget orchestrator-kall (sparer ett round-trip).
@@ -863,6 +877,7 @@ def analyze_query(state: State_Answer) -> Dict[str, Any]:
         "stance": plan.stance,
         "harm_to_others_tense": plan.harm_to_others_tense,
         "main_category": plan.main_category or "",
+        "asker_gender": plan.asker_gender or "ukjent",
         "subqueries": subqueries,
     }
     
@@ -919,6 +934,7 @@ def fast_single(state: State_Answer) -> Dict[str, Any]:
         "fast_llm": state.get("fast_llm") or state["llm"],
         "conversation_str": state.get("conversation_str", ""),
         "query_severity": state.get("query_severity", "Green"),
+        "asker_gender": state.get("asker_gender", "ukjent"),
         "claims_valid_threshold": state.get("claims_valid_threshold", 1.0),
         "entailment_check": state.get("entailment_check", True),
         "debug_emit_nodes": state.get("debug_emit_nodes", False),
@@ -1384,7 +1400,8 @@ def query_grounded(state: WorkerState) -> Dict[str, Any]:
         retriever = state["retriever"]
         question = state["subquery"].subquery
         severity = state.get("query_severity", "Green")
-        
+        asker_gender = state.get("asker_gender", "ukjent")
+
         empathy_instruction = ""
         #if severity in ("Yellow", "Red"):
         empathy_instruction = (
@@ -1392,6 +1409,27 @@ def query_grounded(state: WorkerState) -> Dict[str, Any]:
             "før du gir informasjon. Vis empati, men bare basert på det som faktisk "
             "er relevant for spørsmålet.\n"
         )
+
+        # Kjønns-hint: styrer kun vinkling/utvalg i svaret, ikke hvilke noder
+        # som hentes. 'ukjent' (standard) skal holde svaret kjønnsnøytralt.
+        if asker_gender == "jente":
+            gender_instruction = (
+                "Brukeren er selv jente/kvinne. Der kjønn er relevant (f.eks. "
+                "prevensjon, kropp, helse), vinkle svaret ut fra dette. Ikke "
+                "tilskriv brukeren et annet kjønn.\n"
+            )
+        elif asker_gender == "gutt":
+            gender_instruction = (
+                "Brukeren er selv gutt/mann. Der kjønn er relevant (f.eks. "
+                "prevensjon, kropp, helse), vinkle svaret ut fra dette. Ikke "
+                "tilskriv brukeren et annet kjønn.\n"
+            )
+        else:
+            gender_instruction = (
+                "Brukerens kjønn er ukjent. Ikke anta kjønn. Hold svaret "
+                "kjønnsnøytralt, og dekk relevante perspektiver der kjønn "
+                "ellers ville spilt inn.\n"
+            )
 
         # Retrieval
         nodes = retriever.retrieve(question) or []
@@ -1486,6 +1524,7 @@ def query_grounded(state: WorkerState) -> Dict[str, Any]:
             question=question,
             context=ctx,
             empathy_hint=empathy_instruction,
+            gender_hint=gender_instruction,
         )
 
         ga, in_tokens, out_tokens = _invoke_with_usage(
@@ -1839,6 +1878,7 @@ def emit_query_answer_references(state: State_Answer) -> Dict[str, Any]:
                 "query_severity": state.get("query_severity", ""),
                 "stance": state.get("stance", ""),
                 "harm_to_others_tense": state.get("harm_to_others_tense", "na"),
+                "asker_gender": state.get("asker_gender", "ukjent"),
                 "response_style": state.get("response_style", ""),
                 "response_style_source": state.get("response_style_source", ""),
                 "relevancy_band": relevancy_band,
@@ -1941,6 +1981,7 @@ def assign_workers(state: State_Answer) -> List[Send]:
                 "retriever": state["retriever"],
                 "conversation_str": state.get("conversation_str", ""),
                 "query_severity": state.get("query_severity", "Green"),
+                "asker_gender": state.get("asker_gender", "ukjent"),
                 "claims_valid_threshold": state.get("claims_valid_threshold", 1.0),
                 "entailment_check": state.get("entailment_check", True),
                 "debug_emit_nodes": state.get("debug_emit_nodes", False),

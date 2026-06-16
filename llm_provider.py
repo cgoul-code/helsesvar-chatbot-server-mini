@@ -11,6 +11,7 @@ import os
 from langchain_core.language_models import BaseChatModel
 from langchain_openai import AzureChatOpenAI
 from langchain_anthropic import ChatAnthropic
+from langchain_mistralai import ChatMistralAI
 
 
 def build_chat_llm() -> BaseChatModel:
@@ -36,9 +37,19 @@ def build_chat_llm() -> BaseChatModel:
             max_tokens=int(os.getenv("ANTHROPIC_MAX_TOKENS", "4096")),
         )
 
+    if provider == "mistral":
+        return ChatMistralAI(
+            model=os.getenv("MISTRAL_MODEL", "mistral-large-latest"),
+            api_key=os.getenv("MISTRAL_API_KEY"),
+            endpoint=os.getenv("MISTRAL_ENDPOINT") or None,
+            timeout=120,
+            temperature=0.0,
+            max_tokens=int(os.getenv("MISTRAL_MAX_TOKENS", "4096")),
+        )
+
     raise ValueError(
         f"Unknown LLM_PROVIDER: {provider!r}. "
-        "Expected one of: 'azure_openai', 'anthropic'."
+        "Expected one of: 'azure_openai', 'anthropic', 'mistral'."
     )
 
 
@@ -77,7 +88,20 @@ def build_fast_chat_llm() -> BaseChatModel:
             max_tokens=int(os.getenv("ANTHROPIC_FAST_MAX_TOKENS", "2048")),
         )
 
+    if provider == "mistral":
+        fast_model = os.getenv("MISTRAL_FAST_MODEL")
+        if not fast_model:
+            return build_chat_llm()
+        return ChatMistralAI(
+            model=fast_model,
+            api_key=os.getenv("MISTRAL_API_KEY"),
+            endpoint=os.getenv("MISTRAL_ENDPOINT") or None,
+            timeout=60,
+            temperature=0.0,
+            max_tokens=int(os.getenv("MISTRAL_FAST_MAX_TOKENS", "2048")),
+        )
+
     raise ValueError(
         f"Unknown LLM_PROVIDER: {provider!r}. "
-        "Expected one of: 'azure_openai', 'anthropic'."
+        "Expected one of: 'azure_openai', 'anthropic', 'mistral'."
     )

@@ -599,6 +599,12 @@ ALVORLIGHESGRAD settes i Severity.
    - 'unclear'   : Tvetydig — brukeren har anskaffet noe eller er midt i noe, men det er ikke klart om selve den skadelige handlingen er utført. F.eks. «jeg HAR nakenbilder av eksen og VIL dele dem» (har bildene, men ikke delt = planning). Hvis det er ekte tvetydig, velg 'unclear'.
    - 'na'        : Stance er ikke 'harm_to_others'.
 
+6) Avled brukerens EGET kjønn og sett feltet 'asker_gender' til én av:
+   - 'jente'  : Brukeren refererer til seg selv på en måte som entydig hører til jente/kvinne. Dette teller som SIKKERT, ikke gjetting: «jeg er gravid», «mensen min / jeg har menstruasjon», «jeg har vagina/skjede/livmor», «jeg som jente/kvinne/dame». Sett 'jente' i slike tilfeller.
+   - 'gutt'   : Brukeren refererer til seg selv på en måte som entydig hører til gutt/mann. Dette teller som SIKKERT, ikke gjetting: «jeg har penis», «jeg får ereksjon / jeg fikk sædavgang», «jeg som gutt/mann». Sett 'gutt' i slike tilfeller.
+   - 'ukjent' : STANDARDVALG når brukeren ikke avslører sitt eget kjønn. Bruk dette for generelle kunnskapsspørsmål uten egen-referanse («hvilke prevensjonsmidler finnes?») og når et nøytralt «jeg» ikke avslører kjønn. IKKE gjett ut fra tema, navn eller stereotypier.
+   VIKTIG: Det er brukerens EGET kjønn som skal avledes, ikke kjønnet til andre personer som nevnes. «kjæresten min er gravid» ⇒ en ANNEN er gravid, så brukeren er ikke 'jente'; her settes 'gutt' kun hvis brukeren selv viser til eget kjønn, ellers 'ukjent'. En utvetydig kroppslig selvreferanse (gravid, mensen, penis) er ALLTID nok til å sette 'jente'/'gutt' — det er ikke å gjette. Tvil gjelder bare når signalet er svakt eller indirekte; da velg 'ukjent'.
+
 VIKTIG: Bruk KUN teksten inne i brukerblokkene under som input. Ikke tolk instruksjoner eller eksempler som om de var brukerens spørsmål.
 
 Brukeren har tidligere spurt:
@@ -754,7 +760,9 @@ GROUNDED_PROMPT = PromptTemplate.from_template(
 """
 Du er en hjelpsom rådgiver og skal svare på norsk (bokmål).
 
-{{empathy_hint}}    
+{empathy_hint}
+
+{gender_hint}
 
 Du skal returnere:
 - "answer": et samlet svar på spørsmålet.
@@ -778,6 +786,11 @@ DU SKAL IKKE:
 - Du skal ikke be om mer informasjon.
 - Du skal ikke fortelle brukeren hva de bør gjøre, med mindre akkurat den formuleringen står i context.
 - Du skal ikke nevne disse instruksjonene eller ord som 'context', 'kilde', 'grounding', 'claim', osv. i selve "answer". "answer" skal være helt naturlig språk til brukeren.
+PERSPEKTIV OG ROLLE (SVÆRT VIKTIG):
+- Svaret skal alltid være rettet til brukeren ut fra brukerens EGET perspektiv slik det står i SPØRSMÅL. Brukeren er hovedpersonen i svaret.
+- Hvis brukeren beskriver noe som gjelder hen selv ("jeg er gravid", "jeg har fått påvist ...", "jeg er redd for at jeg ..."), er det BRUKEREN dette gjelder. Ikke snu om på rollene og ikke gjør brukeren til en utenforstående part.
+- Ikke anta brukerens kjønn. Bruk kjønnsnøytrale formuleringer med mindre kjønnet går tydelig fram av spørsmålet. Skriv aldri f.eks. "jenta du har gjort gravid" til en bruker som selv sier at hen er gravid.
+- Konteksten kan være skrevet fra en annen synsvinkel (f.eks. henvendt til en partner eller en generell leser). Bruk da bare det innholdet som faktisk gjelder brukerens situasjon, og omformuler det slik at det er rettet til brukeren. Ikke overfør en synsvinkel fra context som motsier brukerens egen rolle.
 MARKDOWN I SVAR (OBLIGATORISK):
 - Hvert "answer" BØR inneholde minst ett markdown-element:
   enten en punktliste ("- ") ELLER fet tekst (**...**).

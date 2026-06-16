@@ -4,17 +4,17 @@ config:
     curve: linear
 ---
 graph TD;
-	__start__([<p>__start__</p>]):::first
-	analyze_query(analyze_query)
-	fast_single(fast_single)
-	query_grounded(query_grounded)
-	synthesize_style_stream(synthesize_style_stream)
-	emit_query_answer_references(emit_query_answer_references)
-	related_queries_dialog_from_query(related_queries_dialog_from_query)
-	refuse_harm_to_others(refuse_harm_to_others)
-	help_after_harm(help_after_harm)
-	address_prejudice(address_prejudice)
-	__end__([<p>__end__</p>]):::last
+	__start__([<p>Start</p>]):::first
+	analyze_query["Analyser spørsmål"]
+	fast_single["Hurtigsvar (enkelt)"]
+	query_grounded["Kunnskapsbasert svar"]
+	synthesize_style_stream["Formuler &amp; strøm svar"]
+	emit_query_answer_references["Send svar + kilder"]
+	related_queries_dialog_from_query["Relaterte spørsmål"]
+	refuse_harm_to_others["Avvis: skade på andre"]
+	help_after_harm["Hjelp etter skade"]
+	address_prejudice["Adresser fordommer"]
+	__end__([<p>Slutt</p>]):::last
 	__start__ --> analyze_query;
 	address_prejudice --> emit_query_answer_references;
 	analyze_query -.-> address_prejudice;

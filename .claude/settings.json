@@ -4,7 +4,12 @@
       "Bash(python -c 'import ast *)",
       "Bash(node -e \"const b=require\\('@babel/core'\\); b.transformFileSync\\('src/HeiChatClientV2.jsx',{presets:[['@babel/preset-react']]}\\); console.log\\('JSX parse OK'\\);\")",
       "Bash(node -e \"require\\('@babel/core'\\).transformFileSync\\('src/HeiChatClientV2.jsx',{presets:[['@babel/preset-react']]}\\); console.log\\('JSX parse OK'\\);\")",
-      "Bash(python -c ' *)"
+      "Bash(python -c ' *)",
+      "PowerShell(python -m pip install langchain-mistralai 2>&1)",
+      "PowerShell(python -c \"import langchain, langchain_openai, langchain_anthropic, langchain_mistralai; from llm_provider import build_chat_llm, build_fast_chat_llm; print\\('imports OK'\\)\" 2>&1)",
+      "PowerShell($env:PYTHONPATH=\".\"; python -u test/_gender_smoke.py)",
+      "Bash(python -c \"import json; d=json.load\\(open\\('test/data/infoseeker_expected_behaviour_questions.json',encoding='utf-8'\\)\\); print\\('Valid JSON,', len\\(d\\), 'entries'\\); [print\\(' -', e['question'][:55]\\) for e in d]\")",
+      "PowerShell($env:PYTHONPATH=\".\"; python -u test/run_classification_tests.py --files infoseeker_expected_behaviour_questions.json)"
     ]
   }
 }
