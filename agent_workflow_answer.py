@@ -487,6 +487,12 @@ def _emit_query_status(
             "validate_response_result": state.get("validate_response_result", ""),
             "input_tokens": cost["input_tokens"],
             "output_tokens": cost["output_tokens"],
+            # Splitt per modell, så panel-kostnaden er reproduserbar (hoved- og
+            # fast-tokens prises ulikt).
+            "main_input_tokens": cost["main_input_tokens"],
+            "main_output_tokens": cost["main_output_tokens"],
+            "fast_input_tokens": cost["fast_input_tokens"],
+            "fast_output_tokens": cost["fast_output_tokens"],
             "cost_usd": cost["cost_usd"],
             "cost_nok": cost["cost_nok"],
         },
