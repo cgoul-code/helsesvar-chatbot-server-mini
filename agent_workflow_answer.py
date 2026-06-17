@@ -44,9 +44,12 @@ from registry import (
     HELP_AFTER_HARM_SHORT_ANSWER,
     PREJUDICE_ANSWER,
     PREJUDICE_SHORT_ANSWER,
+    SELF_HARM_ANSWER,
+    SELF_HARM_SHORT_ANSWER,
     REFUSE_HARM_PROMPT,
     HELP_AFTER_HARM_PROMPT,
     ADDRESS_PREJUDICE_PROMPT,
+    SELF_HARM_PROMPT,
     HJELPETJENESTER_KATALOG,
     HJELPETJENESTER_BY_ID,
     format_hjelpetjeneste_linje,
@@ -162,7 +165,7 @@ class State_Answer(TypedDict):
     refined_query: str
     main_category: str
     query_severity: Literal["Green", "Yellow", "Red", ""]
-    stance: Literal["info_seeker", "affected_party", "harm_to_others", "expresses_prejudice", "ambiguous"]
+    stance: Literal["info_seeker", "affected_party", "harm_to_others", "harm_to_self", "expresses_prejudice", "ambiguous"]
     harm_to_others_tense: Literal["planning", "completed", "unclear", "na"]
     # Brukerens eget kjønn, avledet i analyze_query. 'ukjent' = standard/ingen
     # antakelse. Brukes til å vinkle svaret der kjønn er relevant (prevensjon,
@@ -187,8 +190,14 @@ class State_Answer(TypedDict):
     final_answer: str
     final_short_answer: str
     
+    # Tokens fra HOVEDmodellen (state["llm"], f.eks. gpt-4.1-mini).
     input_tokens: Annotated[int, add]
     output_tokens: Annotated[int, add]
+    # Tokens fra FAST-modellen (state["fast_llm"], f.eks. gpt-4o-mini). Holdes
+    # adskilt fordi den prises billigere – cost-beregningen priser hver modell
+    # for seg i stedet for å bruke én felles pris (som ville vært feil).
+    fast_input_tokens: Annotated[int, add]
+    fast_output_tokens: Annotated[int, add]
 
     ''' tuning '''
     # Min fraction of cited claims that must be supported for an answer to
@@ -245,15 +254,16 @@ class QueryPlan(BaseModel):
         description=(
             "Define the severity (ALVORLIGHESGRAD) for the query")
     )
-    stance: Literal["info_seeker", "affected_party", "harm_to_others", "expresses_prejudice", "ambiguous"] = Field(
+    stance: Literal["info_seeker", "affected_party", "harm_to_others", "harm_to_self", "expresses_prejudice", "ambiguous"] = Field(
         default="info_seeker",
         description=(
             "Brukerens rolle i situasjonen: 'info_seeker' (ber om generell info), "
             "'affected_party' (beskriver noe som rammer brukeren selv), "
             "'harm_to_others' (ber om hjelp til å påføre andre skade — straffbart "
-            "eller åpenbart skadelig), 'expresses_prejudice' (uttrykker en fordom "
-            "eller nedvurderende holdning mot en gruppe), eller 'ambiguous' (uklart "
-            "hvem som er aktør)."
+            "eller åpenbart skadelig), 'harm_to_self' (uttrykker tanker om eller "
+            "intensjon til å skade seg selv — selvskading, selvmord o.l.), "
+            "'expresses_prejudice' (uttrykker en fordom eller nedvurderende "
+            "holdning mot en gruppe), eller 'ambiguous' (uklart hvem som er aktør)."
         ),
     )
     harm_to_others_tense: Literal["planning", "completed", "unclear", "na"] = Field(
@@ -399,6 +409,90 @@ def _extract_usage_tokens(usage_meta: dict) -> tuple[int, int]:
         out_tokens += int(data.get("output_tokens", 0) or 0)
 
     return in_tokens, out_tokens
+
+
+# Standard NOK-per-USD når MERVERDI/kurs ikke er satt i env. Grovt anslag –
+# overstyr med USD_TO_NOK i miljøet for en mer presis omregning.
+_DEFAULT_USD_TO_NOK = 10.0
+
+
+def _compute_cost(
+    input_tokens: int,
+    output_tokens: int,
+    fast_input_tokens: int = 0,
+    fast_output_tokens: int = 0,
+) -> Dict[str, float]:
+    """Regn ut kostnad, priset PER MODELL.
+
+    Hoved- og fast-modell prises hver for seg, fordi de typisk har ulik pris
+    (f.eks. gpt-4.1-mini vs gpt-4o-mini). Å bruke én felles pris ville vært
+    feil. Priser leses fra env (USD per 1M tokens) med trygge defaults:
+      - PRICE_INPUT_USD_PER_M / PRICE_OUTPUT_USD_PER_M           → hovedmodell
+      - PRICE_FAST_INPUT_USD_PER_M / PRICE_FAST_OUTPUT_USD_PER_M → fast-modell
+        (faller tilbake til hovedmodellens pris hvis ikke satt)
+    En manglende env-variabel gir pris 0, ikke kræsj. Returnerer USD + NOK og
+    totale token-tall (hoved + fast).
+    """
+    main_in = int(input_tokens or 0)
+    main_out = int(output_tokens or 0)
+    fast_in = int(fast_input_tokens or 0)
+    fast_out = int(fast_output_tokens or 0)
+
+    price_in = float(os.getenv("PRICE_INPUT_USD_PER_M", "0") or 0)
+    price_out = float(os.getenv("PRICE_OUTPUT_USD_PER_M", "0") or 0)
+    fprice_in = float(os.getenv("PRICE_FAST_INPUT_USD_PER_M", str(price_in)) or price_in)
+    fprice_out = float(os.getenv("PRICE_FAST_OUTPUT_USD_PER_M", str(price_out)) or price_out)
+    usd_to_nok = float(os.getenv("USD_TO_NOK", str(_DEFAULT_USD_TO_NOK)) or _DEFAULT_USD_TO_NOK)
+
+    cost_usd = (
+        main_in * price_in + main_out * price_out
+        + fast_in * fprice_in + fast_out * fprice_out
+    ) / 1_000_000
+
+    return {
+        "input_tokens": main_in + fast_in,
+        "output_tokens": main_out + fast_out,
+        "main_input_tokens": main_in,
+        "main_output_tokens": main_out,
+        "fast_input_tokens": fast_in,
+        "fast_output_tokens": fast_out,
+        "cost_usd": cost_usd,
+        "cost_nok": cost_usd * usd_to_nok,
+    }
+
+
+def _emit_query_status(
+    state: State_Answer,
+    cost: Dict[str, float],
+    relevancy_band: str,
+    best_node_score: float,
+) -> None:
+    """Bygg og emit query_status-payloaden (info-ruten i klienten).
+
+    Samlet i én helper så den kan emittes både fra emit_query_answer_references
+    (svar-fasen) og på nytt fra related_queries-noden med den FULLE kostnaden
+    (inkl. related_queries-kallet, som kjører etter den første emitteringen).
+    """
+    payload = json.dumps(
+        {
+            "refined_query": state.get("refined_query", ""),
+            "query_severity": state.get("query_severity", ""),
+            "stance": state.get("stance", ""),
+            "harm_to_others_tense": state.get("harm_to_others_tense", "na"),
+            "asker_gender": state.get("asker_gender", "ukjent"),
+            "response_style": state.get("response_style", ""),
+            "response_style_source": state.get("response_style_source", ""),
+            "relevancy_band": relevancy_band,
+            "best_node_score": best_node_score,
+            "validate_response_result": state.get("validate_response_result", ""),
+            "input_tokens": cost["input_tokens"],
+            "output_tokens": cost["output_tokens"],
+            "cost_usd": cost["cost_usd"],
+            "cost_nok": cost["cost_nok"],
+        },
+        ensure_ascii=False,
+    )
+    _emit(payload, event="query_status")
 
 def _wrap_at_nearest_space(text: str, width: int = 80) -> str:
     """
@@ -856,11 +950,16 @@ def analyze_query(state: State_Answer) -> Dict[str, Any]:
     )
 
     planner = llm.with_structured_output(QueryPlan)
-    plan: QueryPlan = planner.invoke(prompt)
+    plan, in_tokens, out_tokens = _invoke_with_usage(planner, prompt)
 
+    # harm_to_others_tense er bare meningsfull for stance='harm_to_others'.
+    # LLM-en setter den av og til (f.eks. 'planning') også for harm_to_self
+    # eller andre stances; normaliser til 'na' så routing/UI/tester ikke ser
+    # en tense som ikke gjelder.
+    harm_tense = plan.harm_to_others_tense if plan.stance == "harm_to_others" else "na"
 
     # Vi skriver om query i state til renskrevet versjon
-    print(f'Severity: {plan.query_severity}, Stance: {plan.stance}, Needs subqueries: {plan.needs_subqueries}, Harm tense: {plan.harm_to_others_tense}, Gender: {plan.asker_gender}')
+    print(f'Severity: {plan.query_severity}, Stance: {plan.stance}, Needs subqueries: {plan.needs_subqueries}, Harm tense: {harm_tense}, Gender: {plan.asker_gender}')
 
     # Bygg SubQuery-objekter fra delspørsmålene den samme callen produserte,
     # så vi slipper et eget orchestrator-kall (sparer ett round-trip).
@@ -875,10 +974,13 @@ def analyze_query(state: State_Answer) -> Dict[str, Any]:
         "needs_subqueries": plan.needs_subqueries,
         "query_severity": plan.query_severity,
         "stance": plan.stance,
-        "harm_to_others_tense": plan.harm_to_others_tense,
+        "harm_to_others_tense": harm_tense,
         "main_category": plan.main_category or "",
         "asker_gender": plan.asker_gender or "ukjent",
         "subqueries": subqueries,
+        # analyze_query kjører på fast_llm → fast-tokens.
+        "fast_input_tokens": in_tokens,
+        "fast_output_tokens": out_tokens,
     }
     
 def orchestrator(state: State_Answer) -> Dict[str, Any]:
@@ -949,7 +1051,9 @@ def fast_single(state: State_Answer) -> Dict[str, Any]:
 
     in_tokens = result.get("input_tokens", 0) or 0
     out_tokens = result.get("output_tokens", 0) or 0
-    
+    fast_in_tokens = result.get("fast_input_tokens", 0) or 0
+    fast_out_tokens = result.get("fast_output_tokens", 0) or 0
+
     placeholder = _pick_cannot_answer_placeholder(state.get("query_severity", "Green"))
     final_answer = placeholder
     final_short_answer = placeholder
@@ -973,8 +1077,14 @@ def fast_single(state: State_Answer) -> Dict[str, Any]:
         "final_answer": final_answer,
         "final_short_answer": final_short_answer,
         "references": refs,
-        "input_tokens": (state.get("input_tokens", 0) or 0) + in_tokens,
-        "output_tokens": (state.get("output_tokens", 0) or 0) + out_tokens,
+        # NB: token-feltene er Annotated[int, add] – returner kun DELTA-en for
+        # dette steget (ikke state.get(...) + delta, som ville dobbelt-telt).
+        # query_grounded skiller allerede hoved- (GROUNDED) og fast-tokens
+        # (entailment); vi viderefører begge.
+        "input_tokens": in_tokens,
+        "output_tokens": out_tokens,
+        "fast_input_tokens": fast_in_tokens,
+        "fast_output_tokens": fast_out_tokens,
         "validate_response_result": validate_response_result,
     }
     
@@ -991,6 +1101,10 @@ def route_after_analysis(state: State_Answer):
     siden delspørsmålene allerede er produsert i analyze_query. Det sparer
     det tidligere separate orchestrator-kallet.
     """
+    # Selvskade/selvmord overstyrer alt annet: en safety-kritisk gren som
+    # møter brukeren med krisestøtte i stedet for et RAG-svar.
+    if state.get("stance") == "harm_to_self":
+        return "respond_self_harm"
     if state.get("stance") == "harm_to_others":
         tense = state.get("harm_to_others_tense", "unclear")
         if tense == "completed":
@@ -1240,6 +1354,57 @@ def address_prejudice(state: State_Answer) -> Dict[str, Any]:
         return {
             "final_answer": PREJUDICE_ANSWER,
             "final_short_answer": PREJUDICE_SHORT_ANSWER,
+            "references": [],
+            "validate_response_result": "Accepted",
+            "input_tokens": 0,
+            "output_tokens": 0,
+        }
+
+
+def respond_self_harm(state: State_Answer) -> Dict[str, Any]:
+    """Krise-svar når brukeren uttrykker fare for SEG SELV (selvskading,
+    selvmordstanker o.l.) — stance=harm_to_self.
+
+    Egen gren på linje med harm-nodene: ikke et RAG-svar, men et varmt
+    krisesvar som anerkjenner brukeren, formidler håp og loser videre til
+    krisehjelp. Garanterer deterministisk at Mental Helse Ungdom (116 123,
+    døgnåpen) er med. LLM-drevet, faller tilbake til statisk melding ved feil.
+    """
+    _emit("Stance=harm_to_self: respond_self_harm node", event="info")
+
+    llm = state["llm"]
+    query = state.get("refined_query") or state.get("query") or ""
+    conversation_str = state.get("conversation_str", "") or ""
+
+    try:
+        prompt_value = SELF_HARM_PROMPT.format(
+            query=query,
+            conversation_str=conversation_str,
+            tjenester_katalog=HJELPETJENESTER_KATALOG,
+        )
+        result, in_tokens, out_tokens = _invoke_with_usage(
+            llm.with_structured_output(RefusalResponse),
+            prompt_value,
+        )
+        # Mental Helse Ungdom skal aldri falle ut av et selvskade-svar.
+        final_answer = _ensure_service_in_answer(
+            result.answer,
+            "mental-helse-ungdom",
+            "ring eller chat hvis tankene blir for tunge – åpen hele døgnet",
+        )
+        return {
+            "final_answer": final_answer,
+            "final_short_answer": result.short_answer,
+            "references": [],
+            "validate_response_result": "Accepted",
+            "input_tokens": in_tokens,
+            "output_tokens": out_tokens,
+        }
+    except Exception as e:
+        logging.error("respond_self_harm LLM call failed, using static fallback: %s", e)
+        return {
+            "final_answer": SELF_HARM_ANSWER,
+            "final_short_answer": SELF_HARM_SHORT_ANSWER,
             "references": [],
             "validate_response_result": "Accepted",
             "input_tokens": 0,
@@ -1678,8 +1843,11 @@ def query_grounded(state: WorkerState) -> Dict[str, Any]:
 
         return {
             "completed_subqueries": [state["subquery"]],
-            "input_tokens": in_tokens + ent_in,
-            "output_tokens": out_tokens + ent_out,
+            # GROUNDED-kallet bruker hovedmodellen; entailment-porten fast_llm.
+            "input_tokens": in_tokens,
+            "output_tokens": out_tokens,
+            "fast_input_tokens": ent_in,
+            "fast_output_tokens": ent_out,
         }
 
     except Exception as e:
@@ -1872,22 +2040,17 @@ def emit_query_answer_references(state: State_Answer) -> Dict[str, Any]:
             {"strong": 0.60, "medium": 0.55, "weak": 0.35},
         ) if scores else ""
 
-        status_payload = json.dumps(
-            {
-                "refined_query": state.get("refined_query", ""),
-                "query_severity": state.get("query_severity", ""),
-                "stance": state.get("stance", ""),
-                "harm_to_others_tense": state.get("harm_to_others_tense", "na"),
-                "asker_gender": state.get("asker_gender", "ukjent"),
-                "response_style": state.get("response_style", ""),
-                "response_style_source": state.get("response_style_source", ""),
-                "relevancy_band": relevancy_band,
-                "best_node_score": best_node_score,
-                "validate_response_result": state.get("validate_response_result", ""),
-            },
-            ensure_ascii=False,
+        # Kostnad så langt: analyze_query + svar-nodene (alt som har kjørt før
+        # denne noden), priset per modell. related_queries-kallet kjører ETTER
+        # denne emitteringen og folder inn den FULLE kostnaden via en ny
+        # query_status fra related_queries-noden.
+        cost = _compute_cost(
+            state.get("input_tokens", 0),
+            state.get("output_tokens", 0),
+            state.get("fast_input_tokens", 0),
+            state.get("fast_output_tokens", 0),
         )
-        _emit(status_payload, event="query_status")
+        _emit_query_status(state, cost, relevancy_band, best_node_score)
 
         q = state.get("refined_query")
 
@@ -1928,30 +2091,23 @@ def emit_query_answer_references(state: State_Answer) -> Dict[str, Any]:
                 
         usage_payload = json.dumps(
             {
-                "input_tokens": state.get("input_tokens", 0),
-                "output_tokens": state.get("output_tokens", 0),
+                "input_tokens": cost["input_tokens"],
+                "output_tokens": cost["output_tokens"],
+                "cost_usd": cost["cost_usd"],
+                "cost_nok": cost["cost_nok"],
             },
             ensure_ascii=False,
         )
         _emit(usage_payload, event="Token usage")
-        
-        # priser i USD per 1M tokens
-        price_input_usd_per_m = float(os.environ["PRICE_INPUT_USD_PER_M"])
-        price_output_usd_per_m = float(os.environ["PRICE_OUTPUT_USD_PER_M"])
-        USD_TO_NOK = 10  # grovt anslag
+        _emit(f"\nKost: {cost['cost_nok']:.4f} NOK", event="Token usage")
 
-        input_tokens = state.get("input_tokens", 0) or 0
-        output_tokens = state.get("output_tokens", 0) or 0
+        # Lagre i state så related_queries-noden kan re-emitte query_status med
+        # den fulle kostnaden uten å regne relevans på nytt.
+        return {
+            "best_node_score": best_node_score,
+            "relevancy_band": relevancy_band,
+        }
 
-        kost_usd = (
-            input_tokens * price_input_usd_per_m
-            + output_tokens * price_output_usd_per_m
-        ) / 1_000_000
-
-        kost_nok = kost_usd * USD_TO_NOK
-
-        _emit(f"\nKost: {kost_nok:.4f} NOK", event="Token usage")
-        
     except Exception as e:
         logging.error("Failed to execute emit_query_answer_references: %s", e)
         return {
@@ -1960,8 +2116,6 @@ def emit_query_answer_references(state: State_Answer) -> Dict[str, Any]:
             ),
             "references": [],
         }
-
-    return {}
 
 
 def assign_workers(state: State_Answer) -> List[Send]:
@@ -2239,7 +2393,9 @@ def related_queries_dialog_from_query(state: State_Answer) -> dict:
         f"Kandidatspørsmål (JSONL):\n{candidates_jsonl}\n"
     )
 
-    selection: RelatedSelection = llm.with_structured_output(RelatedSelection).invoke(prompt)
+    selection, rq_in_tokens, rq_out_tokens = _invoke_with_usage(
+        llm.with_structured_output(RelatedSelection), prompt
+    )
 
     selected_ids = selection.selected_node_ids[:2] if selection.selected_node_ids else []
     selected_map = {c["node_id"]: c for c in uniq}
@@ -2252,7 +2408,29 @@ def related_queries_dialog_from_query(state: State_Answer) -> dict:
     ]
 
     _emit(json.dumps(related_queries, ensure_ascii=False), event="related queries")
-    return {"related_queries": related_queries}
+
+    # related_queries kjører på fast_llm. Re-emit query_status med den FULLE
+    # kostnaden (svar-fasen i state + dette kallet), så panel-tallet i klienten
+    # dekker hele agent-kjøringen. state har ennå ikke fått reducer'ens add av
+    # disse tokenene, så vi legger dem til lokalt her.
+    full_cost = _compute_cost(
+        state.get("input_tokens", 0),
+        state.get("output_tokens", 0),
+        (state.get("fast_input_tokens", 0) or 0) + rq_in_tokens,
+        (state.get("fast_output_tokens", 0) or 0) + rq_out_tokens,
+    )
+    _emit_query_status(
+        state,
+        full_cost,
+        state.get("relevancy_band", "") or "",
+        state.get("best_node_score", 0.0) or 0.0,
+    )
+
+    return {
+        "related_queries": related_queries,
+        "fast_input_tokens": rq_in_tokens,
+        "fast_output_tokens": rq_out_tokens,
+    }
 
 # def related_queries_dialog_from_query(state: State_Answer) -> dict:
 #     _emit("Related queries: no-LLM heuristic ranking", event="info")
@@ -2356,6 +2534,7 @@ builder.add_node("related_queries_dialog_from_query", related_queries_dialog_fro
 builder.add_node("refuse_harm_to_others", refuse_harm_to_others)
 builder.add_node("help_after_harm", help_after_harm)
 builder.add_node("address_prejudice", address_prejudice)
+builder.add_node("respond_self_harm", respond_self_harm)
 
 # Start → analyse
 builder.add_edge(START, "analyze_query")
@@ -2366,7 +2545,7 @@ builder.add_edge(START, "analyze_query")
 builder.add_conditional_edges(
     "analyze_query",
     route_after_analysis,
-    ["fast_single", "query_grounded", "refuse_harm_to_others", "help_after_harm", "address_prejudice"],
+    ["fast_single", "query_grounded", "refuse_harm_to_others", "help_after_harm", "address_prejudice", "respond_self_harm"],
 )
 
 # Hvis multi: workere → samle+stream → emit
@@ -2384,6 +2563,7 @@ builder.add_edge("fast_single", "synthesize_style_stream")
 builder.add_edge("refuse_harm_to_others", "emit_query_answer_references")
 builder.add_edge("help_after_harm", "emit_query_answer_references")
 builder.add_edge("address_prejudice", "emit_query_answer_references")
+builder.add_edge("respond_self_harm", "emit_query_answer_references")
 
 # Videre er likt for begge ruter
 builder.add_edge("emit_query_answer_references", "related_queries_dialog_from_query")

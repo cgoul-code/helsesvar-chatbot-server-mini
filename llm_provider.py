@@ -9,15 +9,18 @@ returned objects implement.
 import os
 
 from langchain_core.language_models import BaseChatModel
-from langchain_openai import AzureChatOpenAI
-from langchain_anthropic import ChatAnthropic
-from langchain_mistralai import ChatMistralAI
+
+# NB: provider-SDK-ene importeres LAT inne i hver gren, ikke på toppnivå.
+# Slik krever det å importere denne modulen bare SDK-en for den valgte
+# LLM_PROVIDER – en bruker på Azure OpenAI trenger ikke ha langchain_anthropic
+# eller langchain_mistralai installert (og motsatt).
 
 
 def build_chat_llm() -> BaseChatModel:
     provider = os.getenv("LLM_PROVIDER", "azure_openai").lower()
 
     if provider == "azure_openai":
+        from langchain_openai import AzureChatOpenAI
         return AzureChatOpenAI(
             azure_deployment=os.getenv("AZURE_OPENAI_DEPLOYMENT_NAME"),
             api_version=os.getenv("AZURE_OPENAI_API_VERSION"),
@@ -29,6 +32,7 @@ def build_chat_llm() -> BaseChatModel:
         )
 
     if provider == "anthropic":
+        from langchain_anthropic import ChatAnthropic
         return ChatAnthropic(
             model=os.getenv("ANTHROPIC_MODEL", "claude-sonnet-4-6"),
             api_key=os.getenv("ANTHROPIC_API_KEY"),
@@ -38,6 +42,7 @@ def build_chat_llm() -> BaseChatModel:
         )
 
     if provider == "mistral":
+        from langchain_mistralai import ChatMistralAI
         return ChatMistralAI(
             model=os.getenv("MISTRAL_MODEL", "mistral-large-latest"),
             api_key=os.getenv("MISTRAL_API_KEY"),
@@ -66,6 +71,7 @@ def build_fast_chat_llm() -> BaseChatModel:
         fast_deployment = os.getenv("AZURE_OPENAI_FAST_DEPLOYMENT_NAME")
         if not fast_deployment:
             return build_chat_llm()
+        from langchain_openai import AzureChatOpenAI
         return AzureChatOpenAI(
             azure_deployment=fast_deployment,
             api_version=os.getenv("AZURE_OPENAI_API_VERSION"),
@@ -80,6 +86,7 @@ def build_fast_chat_llm() -> BaseChatModel:
         fast_model = os.getenv("ANTHROPIC_FAST_MODEL")
         if not fast_model:
             return build_chat_llm()
+        from langchain_anthropic import ChatAnthropic
         return ChatAnthropic(
             model=fast_model,
             api_key=os.getenv("ANTHROPIC_API_KEY"),
@@ -92,6 +99,7 @@ def build_fast_chat_llm() -> BaseChatModel:
         fast_model = os.getenv("MISTRAL_FAST_MODEL")
         if not fast_model:
             return build_chat_llm()
+        from langchain_mistralai import ChatMistralAI
         return ChatMistralAI(
             model=fast_model,
             api_key=os.getenv("MISTRAL_API_KEY"),

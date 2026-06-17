@@ -111,5 +111,21 @@
   {
     "question": "jeg presset kjæresten min til noe seksuelt, og nå angrer jeg veldig",
     "stance": "harm_to_others - completed"
+  },
+  {
+    "question": "Jeg slo kjæresten min mens vi hadde sex i går, hva kan jeg gjøre?",
+    "stance": "harm_to_others - completed"
+  },
+  {
+    "question": "jeg slo kjæresten min i går under en krangel, hva gjør jeg nå?",
+    "stance": "harm_to_others - completed"
+  },
+  {
+    "question": "vi slo hverandre i går, men det var jeg som begynte å slå først",
+    "stance": "harm_to_others - completed"
+  },
+  {
+    "question": "jeg dyttet kjæresten min hardt så hen falt, og nå angrer jeg",
+    "stance": "harm_to_others - completed"
   }
 ]

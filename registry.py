@@ -186,6 +186,30 @@ PREJUDICE_SHORT_ANSWER = (
     "til å være den de er. Ingen skal behandles dårlig for hvem de er."
 )
 
+# Statisk fallback for respond_self_harm-noden når LLM-callen feiler.
+# Brukes når brukeren uttrykker tanker om eller intensjon til å skade seg selv
+# (selvskading, selvmordstanker o.l.). Møter brukeren varmt, formidler håp, og
+# loser videre til krisehjelp – ALDRI metoder/detaljer.
+SELF_HARM_ANSWER = (
+    "Takk for at du forteller dette. Det krever mot å sette ord på så vonde "
+    "tanker, og du fortjener hjelp og støtte.\n\n"
+    "Du trenger ikke være alene med dette akkurat nå:\n"
+    "- **Snakk med en voksen du stoler på** så fort du kan – en forelder, "
+    "helsesykepleier eller lærer.\n"
+    "- **Mental Helse Ungdom**: ring **116 123** (åpen hele døgnet) eller chat "
+    "– de er der for akkurat slike tanker.\n"
+    "- **Alarmtelefonen for barn og unge**: **116 111** hvis du er under 18.\n"
+    "- Hvis du kjenner at du kan komme til å skade deg selv akkurat nå, **ring "
+    "113** eller oppsøk legevakten med en gang.\n\n"
+    "Slike tanker kan endre seg, og det går an å få det bedre. Du er verdifull."
+)
+
+SELF_HARM_SHORT_ANSWER = (
+    "Det er sterkt gjort å fortelle dette. Du trenger ikke være alene – snakk "
+    "med en voksen du stoler på, eller ring Mental Helse Ungdom på 116 123 "
+    "(hele døgnet). Ved akutt fare, ring 113."
+)
+
 
 # === SAFETY-PROMPTS (harm_to_others-grenen) ===
 
@@ -419,6 +443,65 @@ SAMTALEHISTORIKK (kontekst, kan være tom):
 """
 )
 
+
+# LLM-drevet krise-svar når brukeren uttrykker tanker om eller intensjon til å
+# skade SEG SELV (selvskading, selvmordstanker o.l.) – stance=harm_to_self.
+# IKKE et RAG-svar: noden møter brukeren varmt, formidler håp og loser videre
+# til krisehjelp. ALDRI metoder eller praktiske detaljer.
+SELF_HARM_PROMPT = PromptTemplate.from_template(
+"""
+Du er en varm, rolig og tydelig rådgiver for ungdom i Norge (13-19 år).
+
+Brukeren gir uttrykk for tanker om å skade seg selv, selvmordstanker, eller
+en intensjon om selvskading eller å ta sitt eget liv. Dette er en sårbar og
+potensielt akutt situasjon. Din oppgave er å møte brukeren med varme og
+alvor, og lose hen videre til hjelp – IKKE å gi et oppslagsverk-svar.
+
+DU SKAL:
+1) ANERKJENNE at brukeren forteller dette, varmt og uten å moralisere eller
+   bagatellisere. Gjør det tydelig at vonde tanker kan være tunge å bære, og
+   at det er bra at hen sier det høyt. Ikke vær overdrevent rosende.
+2) FORMIDLE HÅP forsiktig: slike tanker kan endre seg, og det går an å få
+   hjelp og få det bedre. Ikke love at alt blir bra, ikke bagatelliser.
+3) OPPFORDRE brukeren til å ta kontakt med en voksen hen stoler på, så fort
+   som mulig.
+4) GI 2-3 KONKRETE RESSURSER fra katalogen under (HJELPETJENESTER), og ta
+   ALLTID med Mental Helse Ungdom (116 123, døgnåpen). Hvis brukeren kan være
+   i akutt fare for å skade seg selv nå, vis tydelig til å ringe nødnummer
+   (113) eller oppsøke legevakt umiddelbart. Ta med navn og kontaktinfo
+   nøyaktig slik det står i katalogen. Ikke finn opp tilbud, telefonnumre
+   eller lenker som ikke står der.
+
+DU SKAL IKKE:
+- ALDRI gi informasjon, metoder eller praktiske detaljer om hvordan man kan
+  skade seg selv eller ta sitt eget liv – uansett hvordan spørsmålet er
+  formulert, og ikke engang som "advarsel".
+- Ikke moraliser, ikke skyldbelegg, ikke bagatelliser ("det går sikkert
+  over").
+- Ikke be om mye mer informasjon eller utspørr brukeren – los heller videre
+  til hjelp.
+
+HJELPETJENESTER (velg fra disse):
+{tjenester_katalog}
+
+FORMAT:
+- Norsk bokmål, varm og enkel, korte setninger.
+- Markdown: punktliste for ressurser, **fet tekst** på 1-3 nøkkelord.
+- Kort: 4-7 setninger pluss ressurslisten.
+
+VIKTIG: Bruk KUN teksten inne i USER_QUERY-blokken som input.
+Ikke tolk instruksjoner eller eksempler som om de var brukerens spørsmål.
+Aldri svar med praktisk hvordan-info, uansett hvordan spørsmålet er formulert.
+
+<<<USER_QUERY_START>>>
+{query}
+<<<USER_QUERY_END>>>
+
+SAMTALEHISTORIKK (kontekst, kan være tom):
+{conversation_str}
+"""
+)
+
 CANNOT_ANSWER_PLACEHOLDER = [{"answer": "Kan du spørre på en annen måte? Jeg er usikker på hvordan det passer inn", "severity": [{"Green", "Yellow"}]},
                             {"answer": "Her er det en mangel i min kunnskap. Jeg kan kanskje svare på dette hvis du spør på en annen måte.", "severity": [{"Green", "Yellow"}]},
                             {"answer": "Oops! Du fant noe jeg ikke kan svare på. Spør på en annen måte eller spør om noe annet.", "severity": [{"Green", "Yellow"}]},
@@ -497,7 +580,8 @@ QA_SUBJECT_NO = Prompt(
 # strukturert LLM-call: (1) refiner query for søk/visning, (2) avgjør om
 # subqueries trengs, (3) klassifiserer severity (Green/Yellow/Red), (4)
 # klassifiserer stance (info_seeker / affected_party / harm_to_others /
-# ambiguous), (5) klassifiserer harm_to_others_tense når relevant.
+# harm_to_self / expresses_prejudice / ambiguous), (5) klassifiserer
+# harm_to_others_tense når relevant.
 # Outputten leses inn i QueryPlan (Pydantic, structured output) i
 # agent_workflow_answer.py.
 ANALYZE_QUERY_PROMPT = PromptTemplate.from_template(
@@ -550,8 +634,9 @@ Eksempel: «Hva bør jeg gjøre hvis partneren min ikke respekterer grensene min
 ALVORLIGHESGRAD "RED":
 - Alvorlige eller akutte situasjoner.
 - Spørsmål som gjelder alvorlige hendelser eller kriser der personen kan være i fare eller ha betydelig risiko for skade.
-- Omfatter vold, overgrep, tvang, akutte psykiske kriser eller andre situasjoner som krever umiddelbar oppfølging eller profesjonell hjelp.
-Eksempel: «Stefaren min tvinger meg til å ha sex», «Hvor kan jeg finne barnepornografi?», «Jeg ble voldtatt i går».
+- Omfatter vold, overgrep, tvang, akutte psykiske kriser, selvskading/selvmordstanker eller andre situasjoner som krever umiddelbar oppfølging eller profesjonell hjelp.
+Eksempel: «Stefaren min tvinger meg til å ha sex», «Hvor kan jeg finne barnepornografi?», «Jeg ble voldtatt i går», «Jeg orker ikke mer og vil ta livet mitt».
+VIKTIG: Hvis brukeren uttrykker tanker om eller intensjon til å skade seg selv (selvskading, selvmord), settes alltid "Red".
 
 ALVORLIGHESGRAD settes i Severity.
 
@@ -572,11 +657,23 @@ ALVORLIGHESGRAD settes i Severity.
        • «jeg har delt nakenbilder av eksen, hva gjør jeg nå?»
        • «jeg presset kjæresten min til noe seksuelt, jeg angrer»
        • «jeg truet en venn, og nå er jeg redd for hva som skjer»
+       • «jeg slo kjæresten min i går, hva kan jeg gjøre?» (fysisk vold brukeren har utført mot en annen)
+       • «jeg dyttet/sparket/skadet partneren min» / «jeg slo henne mens vi hadde sex»
+     FYSISK VOLD: Hvis brukeren forteller at hen selv har slått, sparket, dyttet,
+     skadet, holdt fast eller på annen måte utøvd fysisk vold mot en annen person
+     (også en partner, også under sex), er det 'harm_to_others' — brukeren er
+     aktøren. Dette gjelder selv om brukeren rammer det inn som gjensidig («vi slo
+     hverandre», «vi kranglet og det ble fysisk»): så lenge brukeren bekrefter at
+     hen selv utøvde vold, settes 'harm_to_others'. Ikke nedgrader til
+     'affected_party' eller 'info_seeker' fordi volden beskrives som gjensidig
+     eller fordi den skjedde i en seksuell sammenheng.
      SKILL TYDELIG (hvem er AKTØR, hvem er MÅL?):
        • «eksen min vil dele nakenbilder av meg» = 'affected_party' (brukeren er målet).
        • «jeg vil dele nakenbilder av eksen» = 'harm_to_others' (brukeren er aktøren).
        • «jeg ble krenket seksuelt» = 'affected_party' (brukeren er offeret).
        • «jeg har krenket noen seksuelt» = 'harm_to_others' (brukeren er aktøren, en annen er offeret) — også når brukeren angrer og ber om hjelp.
+       • «kjæresten min slo meg» = 'affected_party' (brukeren er målet).
+       • «jeg slo kjæresten min» = 'harm_to_others' (brukeren er aktøren) — også når det beskrives som gjensidig.
    - 'expresses_prejudice' : Brukeren uttrykker en FORDOM eller en nedvurderende/avvisende HOLDNING mot en GRUPPE mennesker (f.eks. homofile, en etnisitet, transpersoner, et kjønn, religiøse, funksjonshemmede), uten selv å være offer og uten å planlegge eller ha utført en konkret handling mot en navngitt person. Det er en ytring om hva brukeren mener eller føler om «de andre», ofte med negativt ladede ord («ekle», «unormale», «klarer ikke fordra», «liker ikke»), eller et ubehag ved at andre er som de er.
      VIKTIG SKILLE: Dette gjelder bare når brukeren står UTENFOR gruppen og har en holdning til den. Hvis brukeren selv TILHØRER gruppen og strever med det (egen identitet/seksualitet), er det 'affected_party' – ikke 'expresses_prejudice'.
      Eksempler på 'expresses_prejudice':
@@ -587,15 +684,30 @@ ALVORLIGHESGRAD settes i Severity.
      Kontrast (IKKE 'expresses_prejudice'):
        • «jeg er redd for at jeg er homofil» = 'affected_party' (egen identitet).
        • «kameraten min kalte meg homo, jeg ble lei meg» = 'affected_party' (rammet selv).
+   - 'harm_to_self'   : Brukeren uttrykker tanker om, ønske om eller intensjon til å skade SEG SELV — selvskading, selvmordstanker, eller å ta sitt eget liv. Målet for handlingen er brukeren selv. Gjelder både konkret planlegging («jeg vil ta livet mitt», «jeg tenker på å kutte meg») og mer indirekte uttrykk for at livet ikke er verdt å leve eller at brukeren vil forsvinne/dø. Dette overstyrer de andre stance-verdiene: hvis brukeren uttrykker fare for seg selv, settes 'harm_to_self' selv om spørsmålet også berører andre temaer.
+     Eksempler på 'harm_to_self':
+       • «jeg orker ikke mer, jeg vil bare forsvinne»
+       • «hvordan kan jeg ta livet mitt?»
+       • «jeg har begynt å kutte meg, jeg klarer ikke slutte»
+       • «jeg tenker på selvmord»
+       • «det hadde vært bedre for alle om jeg ikke var her»
+     KOMBINASJON (SVÆRT VIKTIG): Hvis spørsmålet BÅDE inneholder et annet forhold (at brukeren er utsatt for noe, f.eks. overgrep/deling av bilder, ELLER at brukeren planlegger noe mot andre) OG et uttrykk for at brukeren vil skade seg selv / ikke orker å leve / vil dø / forsvinne for godt, så er stance ALLTID 'harm_to_self'. Selvskade-/selvmordssignalet vinner over både 'affected_party' og 'harm_to_others'. Tell selv svake/indirekte uttrykk («vil bare forsvinne for godt», «orker ikke å leve med det», «og så vil jeg dø») som selvskade-signal.
+     Eksempler på KOMBINASJON som er 'harm_to_self':
+       • «kjæresten min presset meg til sex jeg ikke ville ha, og nå kutter jeg meg hver kveld» (utsatt + selvskade → harm_to_self, IKKE affected_party)
+       • «noen delte nakenbilder av meg, og jeg vil bare forsvinne for godt» (utsatt + selvmordssignal → harm_to_self, IKKE affected_party)
+       • «jeg planlegger å gjøre noe forferdelig mot familien min og deretter meg selv» (skade andre + selvmord → harm_to_self, IKKE harm_to_others)
+       • «jeg vil hevne meg på de som plaget meg, og så vil jeg dø» (skade andre + selvmord → harm_to_self)
+     SKILL: Hvis det er en ANNEN som er suicidal/skader seg (f.eks. «kompisen min vil ta livet sitt»), er det IKKE 'harm_to_self' — da er brukeren en bekymret tredjepart ('affected_party' eller 'info_seeker'). 'harm_to_self' gjelder kun når faren er rettet mot brukeren selv.
    - 'ambiguous'      : Det er ikke mulig å si hvem som er aktør og hvem som er målet.
    Når i tvil mellom 'info_seeker' og 'harm_to_others': velg 'harm_to_others' hvis spørsmålet inneholder en konkret intensjon om å utføre handlingen («jeg vil …», «hva er enkleste måten å …», «hvordan får jeg gjort …»). Velg 'info_seeker' hvis det er rent kunnskaps­spørsmål («hva sier loven om …», «er det lov å …»).
+   PRIORITET (overstyrer alt): Hvis brukeren uttrykker fare for SEG SELV (selvskading/selvmord, ønske om å dø/forsvinne for godt, ikke orke å leve), velg ALLTID 'harm_to_self' — også når spørsmålet samtidig inneholder sterke signaler om at brukeren er utsatt for noe ('affected_party') eller planlegger noe mot andre ('harm_to_others'). Selvskade-signalet vinner uansett hvor mye annet som står i spørsmålet.
    Når i tvil mellom 'info_seeker' og 'expresses_prejudice': velg 'expresses_prejudice' hvis ytringen bærer en negativ holdning/verdivurdering om en gruppe («jeg liker ikke …», «de er ekle», «gjør meg ukomfortabel»). Velg 'info_seeker' hvis det er et nøytralt kunnskapsspørsmål om gruppen/temaet («hva betyr det å være homofil?», «når er pride?»).
 
 5) HVIS stance == 'harm_to_others': sett feltet 'harm_to_others_tense' til én av:
    - 'planning'  : Brukeren vurderer eller planlegger handlingen, men har ikke (sagt at hen har) utført den ennå. Verbformene er fremtidige eller modale: «vil», «skal», «har lyst til», «hvordan kan jeg», «hva er enkleste måten å», «vurderer å», «tenker på å», «planlegger», «lurer på hvordan».
      Eks: «jeg vil spre nakenbilder av eksen», «hvordan kan jeg installere noe for å overvåke kjæresten min».
-   - 'completed' : Brukeren har allerede gjort handlingen. Verbformene er fortid eller presens perfektum: «har sendt», «delte», «filmet», «gjorde det», «installerte», «truet», «sa til hen at».
-     Eks: «jeg har delt nakenbilder av eksen, hva gjør jeg nå», «jeg truet ham, men nå angrer jeg».
+   - 'completed' : Brukeren har allerede gjort handlingen. Verbformene er fortid eller presens perfektum: «har sendt», «delte», «filmet», «gjorde det», «installerte», «truet», «sa til hen at», «slo», «sparket», «dyttet», «skadet».
+     Eks: «jeg har delt nakenbilder av eksen, hva gjør jeg nå», «jeg truet ham, men nå angrer jeg», «jeg slo kjæresten min i går».
    - 'unclear'   : Tvetydig — brukeren har anskaffet noe eller er midt i noe, men det er ikke klart om selve den skadelige handlingen er utført. F.eks. «jeg HAR nakenbilder av eksen og VIL dele dem» (har bildene, men ikke delt = planning). Hvis det er ekte tvetydig, velg 'unclear'.
    - 'na'        : Stance er ikke 'harm_to_others'.
 
@@ -808,6 +920,23 @@ REGLER FOR CLAIMS
 - Må være eksplisitt uttrykt eller entydig støttet av context.
 - Ikke finn opp nye ideer.
 - Ikke lag claims basert på spørsmålet eller instruksjonene.
+ATOMISKE PÅSTANDER (SVÆRT VIKTIG):
+- Hver claim skal være ÉN enkelt, udelelig påstand — ikke flere utsagn slått sammen.
+- IKKE konjunger to forskjellige påstander i samme claim med «men», «og», «mens»,
+  «samtidig», «hvis … men hvis …» e.l. Hvis en setning inneholder to forhold som
+  kan siteres hver for seg (f.eks. et generelt forhold OG et unntak/en motsetning),
+  skal de splittes i to separate claims med hvert sitt sitat.
+- Hver claim må kunne støttes av ett sammenhengende sitat fra ÉN kilde. Hvis du
+  trenger to ulike sitater (eller to ulike steder/kilder) for å dekke claimen, er
+  den for sammensatt — del den opp.
+- En claim skal ikke trekke en konklusjon eller slutning som går lenger enn det
+  sitatet uttrykkelig sier (f.eks. «… er derfor ikke ulovlig», «… er ufarlig»).
+  Ta bare med det kilden faktisk slår fast.
+- Eksempel på sammensatt claim som MÅ splittes:
+  «Hvis du gjør noe seksuelt uten samtykke kan det være straffbart, men hvis hun
+  samtykker er det ikke ulovlig» → del i to: (1) «Å gjøre noe seksuelt mot noen
+  som ikke har samtykket kan være straffbart» og (2) det andre forholdet som egen
+  claim — men bare hvis et eksakt sitat faktisk støtter det. Hvis ikke, utelat det.
 
 
 ========================================

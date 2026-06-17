@@ -18,7 +18,8 @@
       "PowerShell(python generate_platform_doc.py)",
       "Bash(python -c \"import pandas; print\\(pandas.__version__\\)\")",
       "Bash(ls data *)",
-      "Bash(ls config *)"
+      "Bash(ls config *)",
+      "PowerShell($root=\"c:\\\\Users\\\\ChristianGoulignac\\\\vscode\\\\llama\\\\llama_chatbot_server_mini\"; Set-Location $root; $env:PYTHONPATH=$root; & \"$root\\\\.venv\\\\Scripts\\\\python.exe\" -u \"$root\\\\test\\\\run_classification_tests.py\" --files harm_to_self_questions.json)"
     ],
     "additionalDirectories": [
       "c:\\Users\\ChristianGoulignac\\vscode\\llama\\chatbot-client-HEI20-v2\\client\\src"
