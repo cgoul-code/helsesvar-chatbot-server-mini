@@ -1479,12 +1479,42 @@ def _entailment_needed(claim: str, quotes: List[str], min_overlap: float = 0.9) 
     return (present / len(ct)) < min_overlap
 
 
+def _run_entailment(
+    candidates: List[Tuple[Dict[str, Any], List[str], List[str]]], llm
+) -> Tuple[Dict[int, bool], int, int]:
+    """Build the entailment prompt over `candidates` and return {index: supported}.
+
+    Shared by the batched first pass and the single-claim confirmation pass.
+    """
+    lines = []
+    for i, (ce, quotes, sources) in enumerate(candidates):
+        joined = " | ".join(quotes)
+        block = f"{i}. PÅSTAND: {ce.get('claim_text', '')}\n   SITAT: {joined}"
+        if sources:
+            joined_src = "\n   ---\n   ".join(sources)
+            block += f"\n   KILDETEKST:\n   {joined_src}"
+        lines.append(block)
+    prompt = ENTAILMENT_PROMPT + "\n\n".join(lines)
+    res, in_tok, out_tok = _invoke_with_usage(
+        llm.with_structured_output(_EntailmentResult), prompt
+    )
+    return {v.index: v.supported for v in res.verdicts}, in_tok, out_tok
+
+
 def _apply_entailment_gate(claims_report: List[Dict[str, Any]], llm) -> Tuple[int, int]:
     """Downgrade string-matched claims whose quotes don't actually support them.
 
     Runs ONE batched LLM call over the claims a cheap term-overlap pre-filter
-    flags as suspicious. Fails open: any error keeps the existing string-match
-    validity. Returns (input_tokens, output_tokens) consumed.
+    flags as suspicious. Each claim the batch flags as unsupported is then
+    RE-CHECKED alone before it is downgraded: the batched call occasionally
+    yields a flaky false-positive rejection on borderline claims (e.g. an
+    elliptical quote like «Det er ulovlig for læreren» whose pronoun resolves
+    from the surrounding source), and a focused single-claim re-check clears
+    those while still confirming genuine non-support. Without this, one flaky
+    rejection + a strict claims-threshold discards an otherwise grounded answer.
+
+    Fails open: any error keeps the existing string-match validity. Returns
+    (input_tokens, output_tokens) consumed.
     """
     candidates: List[Tuple[Dict[str, Any], List[str], List[str]]] = []
     for ce in claims_report:
@@ -1515,24 +1545,36 @@ def _apply_entailment_gate(claims_report: List[Dict[str, Any]], llm) -> Tuple[in
     if not candidates:
         return 0, 0
 
-    lines = []
-    for i, (ce, quotes, sources) in enumerate(candidates):
-        joined = " | ".join(quotes)
-        block = f"{i}. PÅSTAND: {ce.get('claim_text', '')}\n   SITAT: {joined}"
-        if sources:
-            joined_src = "\n   ---\n   ".join(sources)
-            block += f"\n   KILDETEKST:\n   {joined_src}"
-        lines.append(block)
-    prompt = ENTAILMENT_PROMPT + "\n\n".join(lines)
-
     try:
-        res, in_tok, out_tok = _invoke_with_usage(
-            llm.with_structured_output(_EntailmentResult), prompt
-        )
-        supported = {v.index: v.supported for v in res.verdicts}
+        supported, in_tok, out_tok = _run_entailment(candidates, llm)
     except Exception as e:
         logging.error("Entailment batch call failed, keeping string-match validity: %s", e)
         return 0, 0
+
+    total_in, total_out = in_tok, out_tok
+
+    # Confirmation pass: re-check each claim the batch flagged as unsupported,
+    # alone, before downgrading. Clears flaky batched false-positives; a genuine
+    # non-support is confirmed by the focused call too. Fails open (keeps the
+    # claim) if the confirmation call errors.
+    for i, (ce, quotes, sources) in enumerate(candidates):
+        if supported.get(i, True):
+            continue
+        try:
+            single, c_in, c_out = _run_entailment([(ce, quotes, sources)], llm)
+            total_in += c_in
+            total_out += c_out
+            downgrade = not single.get(0, True)
+        except Exception as e:
+            logging.error("Entailment confirmation call failed, keeping claim: %s", e)
+            downgrade = False
+        if not downgrade:
+            supported[i] = True
+            _emit(
+                f"✓ Entailment: påstand {ce.get('claim_index', 0) + 1} bekreftet "
+                f"ved ny enkelt-sjekk – beholdes (batch-flagg var trolig en bom).",
+                event="systeminfo",
+            )
 
     for i, (ce, _quotes, _sources) in enumerate(candidates):
         # Default True = don't downgrade a claim the model didn't return a verdict for.
@@ -1554,7 +1596,7 @@ def _apply_entailment_gate(claims_report: List[Dict[str, Any]], llm) -> Tuple[in
             event="systeminfo",
         )
 
-    return in_tok, out_tok
+    return total_in, total_out
 
 
 def query_grounded(state: WorkerState) -> Dict[str, Any]:
