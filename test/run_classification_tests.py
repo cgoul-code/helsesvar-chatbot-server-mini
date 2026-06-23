@@ -585,6 +585,18 @@ async def run_fixture(
             flush=True,
         )
 
+        # Vis det renskrevne spørsmålet og selve svaret, så man kan øyne-sjekke
+        # innholdet mens testen kjører (ikke bare PASS/FAIL).
+        refined = (status.get("refined_query") or "").strip()
+        if refined:
+            print(f"      refined_query: {refined}", flush=True)
+        ans = (status.get("answer") or "").strip()
+        if ans:
+            ans_oneline = " ".join(ans.split())
+            if len(ans_oneline) > 600:
+                ans_oneline = ans_oneline[:597] + "..."
+            print(f"      answer: {ans_oneline}", flush=True)
+
         # The exact node set the agent retrieved for this answer (emitted via
         # the `retrieved_nodes` event). Recorded for every row, pass or fail.
         nodes_text = status.get("nodes_text", "")
@@ -716,12 +728,14 @@ def _style_sheet(ws, columns: List[str]) -> None:
 
 
 SUMMARY_XLSX = os.path.join(RESULTS_DIR, "summary.xlsx")
+FAILURES_XLSX = os.path.join(RESULTS_DIR, "failures.xlsx")
 
 
 def _delete_existing_excels(chosen: List[str]) -> None:
     """Remove each fixture's .xlsx plus the summary, before a fresh run."""
     targets = [_results_xlsx_for(p) for p in chosen]
     targets.append(SUMMARY_XLSX)
+    targets.append(FAILURES_XLSX)
     for t in targets:
         if os.path.exists(t):
             try:
@@ -779,6 +793,7 @@ def _write_summary(results: List[Dict[str, Any]]) -> None:
         p for p in glob.glob(os.path.join(RESULTS_DIR, "*.xlsx"))
         if not os.path.basename(p).startswith("~$")          # Excel lock files
         and not os.path.basename(p).startswith("summary")     # summary + summary_N fallbacks
+        and not os.path.basename(p).startswith("failures")    # the aggregated FAIL sheet
     ]
 
     # A locked file forces a "_2"/"_3" fallback copy, so the same fixture may
@@ -835,6 +850,67 @@ def _write_summary(results: List[Dict[str, Any]]) -> None:
         SUMMARY_XLSX, lambda target: df.to_excel(target, index=False)
     )
     print(f"Wrote summary ({len(rows) - 1} fixtures) to {written}")
+
+
+def _write_failures() -> None:
+    """Collect every FAIL/ERROR row across all fixture result files into one sheet.
+
+    Reads the same per-fixture result Excels as the summary (newest copy per
+    fixture), keeps only the rows whose result is FAIL or ERROR, tags each with
+    its fixture, and writes them to failures.xlsx — one place to review every
+    failing case after a run.
+    """
+    candidates = [
+        p for p in glob.glob(os.path.join(RESULTS_DIR, "*.xlsx"))
+        if not os.path.basename(p).startswith("~$")
+        and not os.path.basename(p).startswith("summary")
+        and not os.path.basename(p).startswith("failures")
+    ]
+    newest_per_fixture: Dict[str, str] = {}
+    for p in candidates:
+        stem = os.path.splitext(os.path.basename(p))[0]
+        canonical = re.sub(r"_\d+$", "", stem)
+        cur = newest_per_fixture.get(canonical)
+        if cur is None or os.path.getmtime(p) > os.path.getmtime(cur):
+            newest_per_fixture[canonical] = p
+
+    keep_cols = [
+        "fixture", "question", "refined_query", "expected", "result",
+        "result_reason", "predicted_label", "behaviour_result",
+        "behaviour_reason", "validate_response_result", "query_severity",
+        "answer", "references", "nodes_text", "run_date",
+    ]
+    frames: List[pd.DataFrame] = []
+    for canonical in sorted(newest_per_fixture):
+        path = newest_per_fixture[canonical]
+        try:
+            df = pd.read_excel(path, sheet_name="results")
+        except Exception as e:
+            print(f"Could not read {os.path.basename(path)} for failures: {e}")
+            continue
+        if "result" not in df.columns:
+            continue
+        bad = df[df["result"].astype(str).isin(["FAIL", "ERROR"])].copy()
+        if bad.empty:
+            continue
+        bad.insert(0, "fixture", canonical + ".json")
+        frames.append(bad[[c for c in keep_cols if c in bad.columns]])
+
+    if not frames:
+        print("No FAILs/ERRORs across fixtures — failures.xlsx not written.")
+        return
+
+    out = pd.concat(frames, ignore_index=True)
+    out = _strip_illegal_excel_chars(out)
+    print(f"\nCollected {len(out)} failing row(s) across {len(frames)} fixture(s).")
+
+    def _write(target: str) -> None:
+        with pd.ExcelWriter(target, engine="openpyxl") as writer:
+            out.to_excel(writer, index=False, sheet_name="failures")
+            _style_sheet(writer.sheets["failures"], out.columns.tolist())
+
+    written = _write_excel_with_fallback(FAILURES_XLSX, _write)
+    print(f"Wrote {len(out)} failing row(s) to {written}")
 
 
 def main() -> None:
@@ -938,6 +1014,8 @@ def main() -> None:
     # 2) Overall summary across all sub-tests (printed + written to Excel).
     if results:
         _write_summary(results)
+        # 3) One sheet collecting every FAIL/ERROR row across all fixtures.
+        _write_failures()
 
     print("\nDone.")
 

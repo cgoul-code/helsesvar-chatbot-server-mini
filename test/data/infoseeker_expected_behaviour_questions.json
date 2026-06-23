@@ -42,7 +42,11 @@
   },
   {
     "question": "Kjæresten min er gravid, hva skal jeg gjøre?",
-    "expected_behaviour": "Svaret skal behandle brukeren som PARTNEREN, ikke som den som selv er gravid. Den skal ikke påstå at brukeren er gravid, men gi råd om hvordan brukeren kan støtte kjæresten sin og hvor de kan få hjelp sammen."
+    "expected_behaviour": "Svaret skal behandle brukeren som PARTNEREN, ikke som om det er brukeren som selv er gravid. Den skal ikke påstå at brukeren er gravid, men gi råd om hvordan brukeren kan støtte kjæresten sin og hvor de kan få hjelp sammen. Den skal IKKE foreslå angrepille, nødprevensjon eller graviditetstest – heller ikke med forbehold som «hvis det fortsatt er aktuelt» – siden hun allerede er gravid."
+  },
+  {
+    "question": "Jeg tok en graviditetstest og den var positiv, hva gjør jeg nå?",
+    "expected_behaviour": "Premisset er at brukeren ALLEREDE er bekreftet gravid. Svaret skal IKKE be brukeren ta en (ny) graviditetstest og skal IKKE foreslå angrepille/nødprevensjon. Det skal i stedet gi støtte og veiledning om videre valg og hvor man kan få hjelp (f.eks. helsestasjon for ungdom)."
   },
   {
     "question": "Jeg fikk mensen for første gang, er det normalt at det gjør vondt?",

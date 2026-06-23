@@ -1599,6 +1599,93 @@ def _apply_entailment_gate(claims_report: List[Dict[str, Any]], llm) -> Tuple[in
     return total_in, total_out
 
 
+# ---------------------------------------------------------
+# Situasjons-filter: retrieval kan rangere en node som handler om en MOTSATT
+# situasjon øverst (f.eks. en angrepille/forebyggings-artikkel for spørsmålet
+# «kjæresten min er gravid»). GROUNDED-modellen klarer ikke å la være å bruke
+# en så dominant node, uansett prompt-instruks. Dette filteret dropper slike
+# situasjonelt motstridende noder FØR generering. Kjøres bare når et billig
+# regex finner et «allerede skjedd»-premiss, så vanlige spørsmål ikke får et
+# ekstra LLM-kall.
+# ---------------------------------------------------------
+
+# Premiss-markører: brukeren oppgir noe som ALLEREDE er et faktum. Holdes smal
+# og presis for å unngå å fyre på vanlige spørsmål.
+_PREMISE_FACT_MARKERS = re.compile(
+    r"\b(?:er|blitt|ble|er\s+blitt)\s+gravid\b"
+    r"|\bventer\s+barn\b"
+    # Positiv graviditetstest, begge rekkefølger («positiv test» / «test ...
+    # var positiv»), avgrenset til samme setning ([^.]{0,30}).
+    r"|\bpositiv\w*[^.]{0,30}\b(?:graviditets)?test"
+    r"|\b(?:graviditets)?test\w*[^.]{0,30}\bpositiv"
+    r"|\btesten?\s+(?:var|er|ble|kom\s+tilbake)\s+positiv"
+    r"|\btestet\s+positivt\b"
+    r"|\b(?:har|hadde)\s+(?:allerede\s+)?(?:sendt|delt)\s+(?:bildet|bildene|det)\b",
+    re.IGNORECASE,
+)
+
+
+class _NodeRelevance(BaseModel):
+    exclude_indices: List[int] = Field(
+        default_factory=list,
+        description="Indeksene til kildeutdrag som motsier brukerens premiss.",
+    )
+
+
+_SITUATION_FILTER_PROMPT = (
+    "Brukeren stiller et spørsmål ut fra en bestemt SITUASJON. Du får "
+    "nummererte KILDEUTDRAG hentet automatisk. Noen kan handle om en ANNEN "
+    "eller MOTSTRIDENDE situasjon enn den brukeren faktisk står i.\n"
+    "Oppgave: finn utdragene som IKKE passer fordi de handler om å FOREBYGGE, "
+    "UNNGÅ eller AVDEKKE noe som ifølge spørsmålet ALLEREDE har skjedd – "
+    "f.eks. utdrag om angrepille, nødprevensjon eller graviditetstest når "
+    "brukeren sier at noen ALLEREDE er gravid. Returner indeksene som skal "
+    "EKSKLUDERES. Vær konservativ: ekskluder kun klare situasjons-bom, behold "
+    "alt som kan være relevant.\n\n"
+    "SPØRSMÅL: {question}\n\n"
+    "KILDEUTDRAG:\n{blocks}\n"
+)
+
+
+def _filter_situational_nodes(
+    question: str, nodes: List[Any], llm
+) -> Tuple[List[Any], int, int]:
+    """Drop retrieved nodes that contradict the user's stated premise.
+
+    Returns (kept_nodes, in_tokens, out_tokens). Fails open: on any error, or
+    if the filter would remove every node, the original list is kept.
+    """
+    if not nodes:
+        return nodes, 0, 0
+    blocks = []
+    for i, n in enumerate(nodes):
+        txt = (_node_text(getattr(n, "node", n)) or "").replace("\n", " ").strip()
+        blocks.append(f"{i}. {txt[:300]}")
+    prompt = _SITUATION_FILTER_PROMPT.format(
+        question=question, blocks="\n".join(blocks)
+    )
+    try:
+        res, in_tok, out_tok = _invoke_with_usage(
+            llm.with_structured_output(_NodeRelevance), prompt
+        )
+        exclude = {i for i in (res.exclude_indices or []) if 0 <= i < len(nodes)}
+    except Exception as e:
+        logging.error("Situational node filter failed, keeping all nodes: %s", e)
+        return nodes, 0, 0
+
+    if not exclude:
+        return nodes, in_tok, out_tok
+    kept = [n for i, n in enumerate(nodes) if i not in exclude]
+    # Fail open: aldri filtrer bort ALT (da har vi ingenting å svare med).
+    if not kept:
+        return nodes, in_tok, out_tok
+    _emit(
+        f"Situasjons-filter: droppet {len(exclude)} node(r) som motsier premisset.",
+        event="info",
+    )
+    return kept, in_tok, out_tok
+
+
 def query_grounded(state: WorkerState) -> Dict[str, Any]:
     """
     For hvert delspørsmål:
@@ -1647,6 +1734,14 @@ def query_grounded(state: WorkerState) -> Dict[str, Any]:
         # Retrieval
         nodes = retriever.retrieve(question) or []
         _emit(f"Retrieved {len(nodes)} nodes", event="info")
+
+        # Situasjons-filter (kun når premiss-regex treffer): dropp noder som
+        # motsier brukerens premiss (f.eks. angrepille-node når hun ER gravid).
+        filt_in = filt_out = 0
+        if nodes and _PREMISE_FACT_MARKERS.search(question or ""):
+            nodes, filt_in, filt_out = _filter_situational_nodes(
+                question, nodes, state.get("fast_llm") or state["llm"]
+            )
 
         # Debug: emit the exact nodes this worker retrieved (text + score),
         # so a test can record the precise source set used for the answer.
@@ -1891,11 +1986,12 @@ def query_grounded(state: WorkerState) -> Dict[str, Any]:
 
         return {
             "completed_subqueries": [state["subquery"]],
-            # GROUNDED-kallet bruker hovedmodellen; entailment-porten fast_llm.
+            # GROUNDED-kallet bruker hovedmodellen; entailment-porten og
+            # situasjons-filteret bruker fast_llm.
             "input_tokens": in_tokens,
             "output_tokens": out_tokens,
-            "fast_input_tokens": ent_in,
-            "fast_output_tokens": ent_out,
+            "fast_input_tokens": ent_in + filt_in,
+            "fast_output_tokens": ent_out + filt_out,
         }
 
     except Exception as e:
