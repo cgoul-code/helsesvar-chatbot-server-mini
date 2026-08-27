@@ -36,7 +36,7 @@ next to it (e.g. unanswered_questions.json -> unanswered_questions.xlsx).
 
 Usage (Windows PowerShell, from repo root):
 
-    $env:PYTHONPATH="."; python -u test/run_classification_tests.py
+    python -u test/run_classification_tests.py
 
 The script asks at the start which fixture(s) to run. You can also pass
 fixtures and config on the command line to skip the prompt:
@@ -66,6 +66,11 @@ from openpyxl.cell.cell import ILLEGAL_CHARACTERS_RE
 from dotenv import find_dotenv, load_dotenv
 from langchain_openai import AzureChatOpenAI
 from llama_index.core import StorageContext, load_index_from_storage
+
+# This script lives in test/, so Python puts test/ — not the repo root — on
+# sys.path. Add the repo root ourselves so the server modules below import
+# without the caller having to set PYTHONPATH.
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from config import VECTOR_INDEX_MAP, ServerSettings, VectorIndexStore
 from answer_utils import get_answer_as_stream

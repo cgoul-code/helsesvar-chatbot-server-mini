@@ -14,6 +14,7 @@ graph TD;
 	refuse_harm_to_others["Avvis: skade på andre"]
 	help_after_harm["Hjelp etter skade"]
 	address_prejudice["Adresser fordommer"]
+	respond_self_harm["Krisehjelp: skade på seg selv"]
 	__end__([<p>Slutt</p>]):::last
 	__start__ --> analyze_query;
 	address_prejudice --> emit_query_answer_references;
@@ -22,11 +23,13 @@ graph TD;
 	analyze_query -.-> help_after_harm;
 	analyze_query -.-> query_grounded;
 	analyze_query -.-> refuse_harm_to_others;
+	analyze_query -.-> respond_self_harm;
 	emit_query_answer_references --> related_queries_dialog_from_query;
 	fast_single --> synthesize_style_stream;
 	help_after_harm --> emit_query_answer_references;
 	query_grounded --> synthesize_style_stream;
 	refuse_harm_to_others --> emit_query_answer_references;
+	respond_self_harm --> emit_query_answer_references;
 	synthesize_style_stream --> emit_query_answer_references;
 	related_queries_dialog_from_query --> __end__;
 	classDef default fill:#f2f0ff,line-height:1.2

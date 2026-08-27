@@ -5,7 +5,7 @@ from quart_cors import cors
 
 
 from config import async_read_indexes, init_env_and_logging, server_settings
-from old.agent_workflow_structured_answer import builder #initialize a static workflow
+
 from routes import register_routes
 
 app = Quart(__name__)

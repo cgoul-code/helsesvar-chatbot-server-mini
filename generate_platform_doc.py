@@ -46,7 +46,8 @@ add_table(
         ["Streaming", "Server-Sent Events (SSE) med keepalive-heartbeat"],
         ["RAG / vektorindeks", "LlamaIndex (llama-index 0.14) med FAISS (faiss-cpu) som vektorlager"],
         ["Agent-/arbeidsflyt", "LangGraph + LangChain"],
-        ["LLM (svargenerering)", "Pluggbart via LLM_PROVIDER: Azure OpenAI (standard) eller Anthropic Claude"],
+        ["LLM (svargenerering)", "Pluggbart via LLM_PROVIDER: Azure OpenAI (standard), Anthropic Claude eller Mistral"],
+        ["LLM (hjelpekall)", "Egen, billigere \u00abfast\u00bb-modell for sp\u00f8rsm\u00e5lsanalyse, entailment-sjekk og relaterte sp\u00f8rsm\u00e5l \u2013 tokens og kostnad telles per modell"],
         ["Embeddings", "Azure OpenAI Embeddings"],
         ["Sesjon/cache", "diskcache (samtalehistorikk per session_id)"],
         ["Hosting", "Azure (App Service / Functions – detekteres via miljøvariabler)"],
@@ -55,6 +56,12 @@ add_table(
 doc.add_paragraph(
     "Indeksene lastes asynkront i bakgrunnen ved oppstart, og /healthz "
     "rapporterer når de er klare."
+)
+doc.add_paragraph(
+    "Svarene produseres av en LangGraph-arbeidsflyt som klassifiserer "
+    "spørsmålet (alvorlighetsgrad, brukerens ståsted), ruter safety-kritiske "
+    "spørsmål til egne noder uten oppslag i kunnskapsbasen, og ellers "
+    "verifiserer hver påstand mot kildene før svaret strømmes ut."
 )
 
 # --- Client ---
@@ -77,7 +84,7 @@ add_table(
 doc.add_heading("Kort oppsummert", level=1)
 for line in [
     "Server: Python + Quart/Hypercorn, RAG med LlamaIndex/FAISS, agentlogikk i "
-    "LangGraph/LangChain, LLM fra Azure OpenAI eller Anthropic Claude – på Azure.",
+    "LangGraph/LangChain, LLM fra Azure OpenAI, Anthropic Claude eller Mistral – på Azure.",
     "Klient: React 18 (CRA/CRACO) med Material UI, snakker med serveren over REST + SSE.",
 ]:
     p = doc.add_paragraph(style="List Bullet")
